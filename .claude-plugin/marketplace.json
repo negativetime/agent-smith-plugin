@@ -1,0 +1,15 @@
+{
+  "name": "agent-smith-marketplace",
+  "description": "agent-smith — a token-saving offload skill for Claude Code: delegate heavy text/code work to Gemini (or local Ollama / Apple FM), then verify with Claude.",
+  "owner": { "name": "negativetime" },
+  "plugins": [
+    {
+      "name": "agent-smith",
+      "source": "./plugins/agent-smith",
+      "description": "Offload bulky/research-heavy text + first-draft code to Gemini/Ollama/Apple-FM, then verify and finish with Claude — to spare Claude's tokens. Disk-aware local-model installer included.",
+      "author": { "name": "negativetime" },
+      "license": "MIT",
+      "keywords": ["gemini", "offload", "token-saving", "ollama", "research", "code-generation"]
+    }
+  ]
+}

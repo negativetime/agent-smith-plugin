@@ -1,0 +1,10 @@
+{
+  "name": "agent-smith",
+  "description": "Offload bulky or research-heavy text + first-draft code to Google Gemini (or local Ollama / Apple Foundation Models), then verify and finish with Claude to spare Claude's tokens and context. Includes a disk-aware local-model installer.",
+  "version": "1.0.0",
+  "author": { "name": "negativetime" },
+  "homepage": "https://github.com/negativetime/agent-smith-plugin",
+  "repository": "https://github.com/negativetime/agent-smith-plugin",
+  "license": "MIT",
+  "keywords": ["gemini", "offload", "token-saving", "ollama", "apple-foundation-models", "research", "code-generation", "delegation"]
+}
