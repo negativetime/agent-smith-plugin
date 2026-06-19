@@ -160,7 +160,9 @@ python "$SKILL\scripts\gemini.py" --file report.pdf "Summarize the findings as b
 **Flags (identical on every OS):** `--model` (flash|pro|flash-lite|full-name) · `--system` ·
 `--file PATH` (repeatable) · `--search` (Google grounding) · `--json` / `--schema PATH` ·
 `--temperature` · `--max-tokens` · `--thinking-budget N` (0 = off, faster/cheaper on Flash) ·
-`--list-models`.
+`--preflight` (gemini-cli: syntax-check generated code and auto-retry once on a SyntaxError) ·
+`--list-models`. The `gemini-cli` backend also auto-applies a deny-all-tools policy
+(`scripts/deny_all_tools.toml`) so it can only return text — never edits files — and runs ~25% leaner.
 
 Deeper API details, the full model list, grounding/Files-API internals, and a curl fallback
 are in [references/gemini-api.md](references/gemini-api.md). Read it only if you hit something
@@ -168,20 +170,27 @@ the flags above don't cover.
 
 ## Backends — where the work actually runs (`--backend`)
 
-All three backends offload the heavy lifting *off Claude* (that's the whole point — spare Claude's
+All four backends offload the heavy lifting *off Claude* (that's the whole point — spare Claude's
 tokens). They differ in cost, power, and privacy. **Default to `gemini`**; reach for the others
 when their specific edge matters.
 
 | `--backend` | Runs on | Cost | Power | Files / web? | Use when |
 |---|---|---|---|---|---|
-| `gemini` *(default)* | Google cloud | free tier, rate-limited | highest (frontier 3.x) | **yes** — `--file`, `--search`, JSON schema | anything substantial; the **only** one that ingests PDFs/images or does live web research |
+| `gemini` *(default)* | Google cloud (API key) | free tier, **rate-limited** | highest (frontier 3.x) | **yes** — `--file`, `--search`, JSON schema | anything substantial; the **only** one that ingests PDFs/images or does live web research |
+| `gemini-cli` | Google cloud (your OAuth login) | your subscription/account quota, **no API rate limit** | highest (same Gemini models) | no (text only) | same Gemini quality but **free-tier 429s are throttling you** — runs on the quota you already have via the CLI login |
 | `fm` | this Mac (Apple Intelligence) | free, **no quota** | small (~3B) | no (text only) | data must stay **private/offline**; quick simple bulk you don't want to spend Gemini quota on |
 | `ollama` | this Mac (local model) | free, **no quota** | mid (model-dependent) | no (text only) | offline/private with better quality than `fm`; **unlimited** high-volume bulk with no rate limits |
 
-- **Gemini stays the brain.** It's the most capable and the only one that ingests files or
-  researches the web. Use `fm` / `ollama` for *text-in → text-out* work you already hold —
+- **Gemini stays the brain.** The API (`gemini`) is the most capable and the only one that ingests
+  files or researches the web. Use the others for *text-in → text-out* work you already hold —
   summarize, rewrite, classify, draft boilerplate — especially when it's **private, offline, or so
-  high-volume that Gemini's free-tier rate limits would throttle you** (a local model has no 429s).
+  high-volume that Gemini's free-tier rate limits would throttle you** (the local ones have no 429s).
+- `gemini-cli` drives the locally-installed **Gemini CLI on your OAuth/Google login**, so it runs on
+  your subscription/account quota instead of the metered API key — the way to keep using top Gemini
+  models when free-tier 429s bite. **One-time setup:** run `gemini` once and choose *"Login with
+  Google."* The skill hides `GEMINI_API_KEY` from the CLI so it uses that login; set
+  `GEMINI_CLI_USE_API_KEY=1` to use the key instead. Text-only; it auto-applies a deny-all-tools
+  policy so it can only generate (never edits files) and runs ~25% leaner.
 - `fm` (Apple Foundation Models, macOS 26+ with Apple Intelligence) is **opt-in and not bundled** —
   this repo ships no binary on purpose (don't run opaque executables from strangers). It needs an
   `fm_helper` you supply; point the skill at it with `FM_HELPER=/path/to/fm_helper`. If unset, the

@@ -1,0 +1,9 @@
+# Gemini CLI Policy Engine — deny ALL tool calls so the CLI can only return text.
+# Used by the agent-smith `gemini-cli` backend: we offload pure text/code GENERATION,
+# so the CLI's agentic file-editing tools must be off. "*" matches any tool (built-in
+# or MCP); a denied tool is removed from the model's memory, which also trims the prompt.
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 0
+denyMessage = "Tools are disabled. Return the requested content as plain text only."

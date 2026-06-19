@@ -44,6 +44,11 @@ export GEMINI_API_KEY=your_key_here     # macOS/Linux (add to your shell profile
 # Windows:  setx GEMINI_API_KEY "your_key_here"   (open a new shell after)
 ```
 
+**Hitting free-tier rate limits (429s)?** If you have the [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+installed and logged in (`gemini` → *"Login with Google"*), use `--backend gemini-cli` to run the same
+Gemini models on your **subscription/account quota instead of the metered API key** — no rate-limit ceiling.
+It auto-disables the CLI's tools (text-only, never edits files) and runs ~25% leaner.
+
 ### Option B — No account, fully local (Ollama)
 
 **Don't have a Gemini account? You don't need one.** Install [Ollama](https://ollama.com), make sure

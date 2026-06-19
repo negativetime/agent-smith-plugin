@@ -17,13 +17,16 @@ Examples:
   python3 gemini.py --list-models
 """
 import argparse
+import ast
 import base64
 import json
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -46,10 +49,11 @@ def log(*a):
 def api_key():
     k = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not k:
-        log("ERROR: GEMINI_API_KEY is not set. Two options: (1) get a free key at "
-            "https://aistudio.google.com/apikey and `export GEMINI_API_KEY=...`, or "
-            "(2) skip the account entirely and run local — `--backend ollama` (set up a model "
-            "with scripts/setup_local_model.sh, e.g. Gemma for general or qwen2.5-coder for code).")
+        log("ERROR: GEMINI_API_KEY is not set. Three options: (1) get a free key at "
+            "https://aistudio.google.com/apikey and `export GEMINI_API_KEY=...`; (2) skip the "
+            "account and run local with `--backend ollama` (set up a model via "
+            "scripts/setup_local_model.sh, e.g. Gemma for general or qwen2.5-coder for code); or "
+            "(3) `--backend gemini-cli` to run Gemini on your Google login, no API key needed.")
         sys.exit(2)
     return k
 
@@ -263,6 +267,239 @@ def call_ollama(prompt, system, temperature, model, max_tokens):
     return text
 
 
+# --- Code pre-flight (pure stdlib, no model calls) -------------------------------
+#
+# DESIGN DECISION: SYNTAX-CHECK ONLY, never EXECUTE, by default.
+#
+# When an offload is a code-generation task, we want to catch obviously-broken
+# drafts (syntax errors) at the backend before they reach the orchestrator, so a
+# broken draft can be auto-retried or flagged instead of wasting a verify pass.
+#
+# We do this by PARSING the code (ast.parse), NOT by running it. Running
+# model-generated code here would be executing untrusted input on the user's
+# machine with the user's privileges, env vars, network, and filesystem — a
+# classic arbitrary-code-execution hole. A "draft" can contain anything: an
+# `os.system("rm -rf ...")` at import time, a network exfil call, an infinite
+# loop, or a crash. ast.parse touches none of that: it only builds the syntax
+# tree and reports SyntaxError, with zero side effects. Real execution (sandboxed
+# subprocess, resource limits, no network) could be a SEPARATE, EXPLICIT opt-in
+# later, but it must default OFF. Syntax-check is the safe, useful 80%: it catches
+# the failure mode we actually see from LLM code drafts (truncation, unbalanced
+# brackets, stray prose), and it cannot harm the host.
+
+def extract_code(text: str) -> str:
+    """Strip a single leading/trailing Markdown code fence if present, else return as-is.
+
+    Handles ```python ... ```, ```py ... ```, and bare ``` ... ``` fences. If the
+    text isn't fenced (or is malformed), it's returned unchanged so the caller can
+    still attempt to parse it.
+    """
+    if text is None:
+        return ""
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    lines = s.splitlines()
+    # Drop the opening fence line (```python / ```py / ``` plus any info string).
+    lines = lines[1:]
+    # Drop the closing fence line if the block is properly closed.
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
+def preflight_python(code: str) -> tuple:
+    """Syntax-check (NOT execute) Python source after stripping any code fence.
+
+    Returns (True, "") if it parses cleanly, else (False, "<SyntaxError msg + lineno>").
+    """
+    src = extract_code(code)
+    try:
+        ast.parse(src)
+        return (True, "")
+    except SyntaxError as e:
+        msg = e.msg or "invalid syntax"
+        line = e.lineno if e.lineno is not None else "?"
+        return (False, f"{msg} (line {line})")
+
+
+# First-person "I did / will do an action" phrases that mark an agentic non-answer
+# (the CLI describing a file action instead of returning the requested content).
+_ACTION_PHRASES = (
+    "i have created", "i have written", "i have implemented", "i have added",
+    "i have updated", "i have modified", "i have generated", "i have edited",
+    "i created", "i wrote", "i implemented", "i added", "i've created",
+    "i've implemented", "i've written", "has been created", "have been created",
+    "has been written", "have been written", "has been implemented",
+    "i will now", "i'll now", "i will wait", "i am now", "i'll wait",
+    "i understand you want", "i understand that you want",
+    "let me know if", "if you'd like me to", "if you would like me to",
+    "would you like me to", "let me know whether",
+)
+_FILE_TEST_PHRASES = (
+    "already exist", "already exists", "the file", "the files", ".py file",
+    "tests pass", "tests passed", "all tests", "test file", "have been verified",
+    "has been verified", "and verified",
+)
+_CODE_TOKENS = (
+    "def ", "class ", "import ", "lambda ", "=>", "#include", "</", "/>",
+    "::", "->", ":=", "```", "    return ", "\treturn ", "; ", " === ",
+)
+_DECL_RE = re.compile(
+    r"(?m)^\s*(?:function|const|let|var|public|private|static)\s+\w+\s*[(=]")
+
+
+def _looks_like_content(resp):
+    """True if the text carries code/markup/structured substance worth keeping."""
+    s = resp.strip()
+    low = s.lower()
+    if any(tok in low for tok in _CODE_TOKENS):
+        return True
+    if _DECL_RE.search(s):
+        return True
+    if (s.startswith("{") and s.rstrip().endswith("}")) or (
+            s.startswith("[") and s.rstrip().endswith("]")):
+        return True
+    if re.search(r"(?m)^\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|\|)", s):
+        return True
+    return False
+
+
+def detect_agentic_nonanswer(resp):
+    """Flag a Gemini-CLI reply that DESCRIBES AN ACTION instead of containing the requested
+    content (e.g. 'I created the file...'). Conservative: tuned for low false positives."""
+    if not resp:
+        return False
+    s = resp.strip()
+    if not s:
+        return False
+    low = s.lower()
+    if _looks_like_content(s):
+        return False
+    if len(s) > 600 or s.count("\n") >= 6:
+        return False
+    if not any(p in low for p in _ACTION_PHRASES):
+        return False
+    has_file_test = any(p in low for p in _FILE_TEST_PHRASES)
+    starts_with_action = any(low.startswith(p) for p in _ACTION_PHRASES)
+    return has_file_test or starts_with_action
+
+
+def call_gemini_cli(prompt, system, temperature, model, preflight=False):
+    """Drive the locally-installed Gemini CLI using its OWN auth (the OAuth/Google login),
+    instead of the metered API key. The point: a logged-in CLI runs on your subscription /
+    account quota, so you dodge the API free-tier rate limits (429s) entirely.
+
+    By default the GEMINI_API_KEY is hidden from the CLI's environment so it falls back to your
+    Google login — run `gemini` once and pick "Login with Google" to set that up. Set
+    GEMINI_CLI_USE_API_KEY=1 to let the CLI use the API key instead (defeats the purpose, but
+    handy for testing). Text in, text out: --file and --search stay on the `gemini` backend.
+    """
+    binary = os.environ.get("GEMINI_CLI") or shutil.which("gemini")
+    if not binary:
+        log("ERROR: gemini CLI not found. Install it (`npm i -g @google/gemini-cli`) or set "
+            "GEMINI_CLI=/path/to/gemini.")
+        sys.exit(2)
+    # The gemini CLI is an agentic CODER: left alone it may try to create files and report on the
+    # action instead of returning the content. This directive (plus read-only `plan` mode) pins it
+    # to plain text-generation behavior, reliably, across models.
+    directive = ("Output only the requested content as plain text. Do not use any tools, and do not "
+                 "create, edit, or read files. Do not describe what you did. Return just the answer.")
+    body = f"{system}\n\n{prompt}" if system else prompt
+    # Always pin a clean model. The CLI's OWN default is a tool-preview model that leaks its
+    # tool-use "thinking" into the response field; a plain model returns just the answer. Map our
+    # flash/pro aliases (default flash) and pass full CLI model names through unchanged.
+    _cli_models = {"flash": "gemini-2.5-flash", "pro": "gemini-2.5-pro",
+                   "flash-lite": "gemini-2.5-flash-lite"}
+    cli_model = _cli_models.get(model or "flash", model)
+
+    use_key = os.environ.get("GEMINI_CLI_USE_API_KEY", "").lower() in ("1", "true", "yes")
+    env = dict(os.environ)
+    if not use_key:  # force OAuth/subscription auth by hiding the key from the CLI
+        for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            env.pop(k, None)
+    # Run in a neutral temp dir so the CLI can't pick up a project's GEMINI.md/context or
+    # touch real files (it's also in read-only `plan` mode).
+    cwd = os.path.join(tempfile.gettempdir(), "agent-smith-gemini-cli")
+    os.makedirs(cwd, exist_ok=True)
+
+    def _invoke(text):
+        """Run the CLI once with the given full prompt text; return (answer, mname, toks)."""
+        cmd = [binary, "-p", text, "-o", "json", "--skip-trust", "--approval-mode", "plan",
+               "-m", cli_model]
+        # Deny ALL tools at the policy level — belt-and-suspenders with the directive + read-only
+        # `plan` mode. The model then can't go agentic, and denied tools drop from its prompt.
+        _policy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deny_all_tools.toml")
+        if os.path.exists(_policy):
+            cmd += ["--policy", _policy]
+        try:
+            out = subprocess.run(cmd, input="", capture_output=True, text=True, env=env,
+                                 cwd=cwd, timeout=600)
+        except subprocess.TimeoutExpired:
+            log("ERROR: gemini CLI timed out (600s).")
+            sys.exit(1)
+        except OSError as e:
+            log(f"ERROR: could not run the gemini CLI at {binary}: {e}")
+            sys.exit(1)
+        if out.returncode != 0:
+            err = (out.stderr or out.stdout or "").strip()
+            if "auth method" in err.lower() or "login" in err.lower():
+                log("ERROR: the gemini CLI has no login configured for subscription/OAuth use. Run "
+                    "`gemini` once and choose 'Login with Google', then retry. (Or set "
+                    "GEMINI_CLI_USE_API_KEY=1 to use your API key through the CLI.)")
+            else:
+                log(f"ERROR: gemini CLI exited {out.returncode}: {err[:500]}")
+            sys.exit(1)
+        try:
+            d = json.loads(out.stdout)
+            ans = d.get("response", "")
+            stats = d.get("stats", {}).get("models", {})
+            mname = next(iter(stats), "default")
+            toks = stats.get(mname, {}).get("tokens", {})
+        except (json.JSONDecodeError, AttributeError):
+            ans, mname, toks = out.stdout.strip(), "default", {}
+        return ans, mname, toks
+
+    answer, mname, toks = _invoke(directive + "\n\n" + body)
+
+    # If the CLI returned an agentic non-answer (it described a file action instead of returning the
+    # content), retry once with a firmer directive and keep whichever reply isn't a non-answer.
+    if detect_agentic_nonanswer(answer):
+        log("\n--- gemini-cli: agentic non-answer detected, retrying once ---")
+        firmer = ("CRITICAL: Do NOT create, edit, or reference files, and do NOT describe any "
+                  "action. Output ONLY the literal requested content as your reply.")
+        r_ans, r_mname, r_toks = _invoke(firmer + "\n\n" + directive + "\n\n" + body)
+        if not detect_agentic_nonanswer(r_ans):
+            answer, mname, toks = r_ans, r_mname, r_toks
+
+    log("\n--- gemini-cli meta ---")
+    auth = "API key (via CLI)" if use_key else "OAuth/subscription"
+    log(f"backend: gemini-cli  model: {mname}  auth: {auth}  (no API rate-limit)")
+    if toks:
+        log(f"tokens: prompt={toks.get('prompt')} total={toks.get('total')} thoughts={toks.get('thoughts')}")
+
+    # Code pre-flight (opt-in): syntax-check the draft; auto-retry ONCE on a syntax error.
+    if preflight:
+        ok, err = preflight_python(answer)
+        if not ok:
+            log(f"PREFLIGHT: draft failed Python syntax-check: {err} — retrying once.")
+            fix = (f"Your previous output had a syntax error: {err}. "
+                   "Return corrected, syntactically valid code only.")
+            retry_text = directive + "\n\n" + body + "\n\n" + fix
+            answer, mname2, toks2 = _invoke(retry_text)
+            if toks2:
+                log(f"tokens (retry): prompt={toks2.get('prompt')} total={toks2.get('total')}")
+            ok2, err2 = preflight_python(answer)
+            if ok2:
+                log("PREFLIGHT: retry parses cleanly.")
+            else:
+                log(f"WARNING: PREFLIGHT still failing after one retry: {err2}. "
+                    "Returning the draft anyway — SCRUTINIZE this code before trusting it.")
+        else:
+            log("PREFLIGHT: draft parses cleanly.")
+    return answer
+
+
 def main():
     # Force UTF-8 on stdout/stderr so Gemini's Unicode output (em-dashes, accents, etc.)
     # prints cleanly on Windows consoles, which often default to cp1252.
@@ -274,12 +511,14 @@ def main():
 
     ap = argparse.ArgumentParser(description="Query Gemini from the shell.")
     ap.add_argument("prompt", nargs="?", help="Prompt text. If omitted, read from stdin.")
-    ap.add_argument("--backend", choices=["gemini", "fm", "ollama"], default="gemini",
-                    help="gemini (cloud, default — files/grounding/JSON) | fm (Apple on-device, "
-                         "free/offline/private) | ollama (local model, free/unlimited/offline).")
+    ap.add_argument("--backend", choices=["gemini", "gemini-cli", "fm", "ollama"], default="gemini",
+                    help="gemini (cloud API, default — files/grounding/JSON) | gemini-cli (drives the "
+                         "logged-in Gemini CLI on your OAuth/subscription quota — no API rate limits) | "
+                         "fm (Apple on-device, free/offline/private) | ollama (local model, free/unlimited).")
     ap.add_argument("--model", default=None,
                     help="gemini: flash|pro|flash-lite|<name> (default flash). "
-                         "ollama: model tag (default qwen2.5-coder:14b). Ignored for fm.")
+                         "ollama: model tag (default qwen2.5-coder:14b). gemini-cli: full CLI model name "
+                         "or omit for the CLI's default. Ignored for fm.")
     ap.add_argument("--system", help="System instruction (role/style/constraints).")
     ap.add_argument("--file", action="append", default=[], metavar="PATH",
                     help="Attach a file (PDF/image/text/csv/...). Repeatable.")
@@ -292,6 +531,9 @@ def main():
     ap.add_argument("--thinking-budget", type=int, default=None, dest="thinking_budget",
                     help="Token budget for model 'thinking' (0 = off, faster/cheaper on Flash).")
     ap.add_argument("--list-models", action="store_true", help="List models this key can use, then exit.")
+    ap.add_argument("--preflight", action="store_true",
+                    help="Treat the output as Python code: syntax-check it (no execution) and, on a "
+                         "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
     args = ap.parse_args()
 
     if args.list_models:
@@ -307,20 +549,23 @@ def main():
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)
 
-    # Non-Gemini backends: on-device Apple FM, or a local Ollama model. Both are text-only
-    # here — file ingest and web grounding stay on the gemini backend (where they're free).
-    if args.backend in ("fm", "ollama"):
+    # Text-only backends: on-device Apple FM, a local Ollama model, or the OAuth'd Gemini CLI.
+    # File ingest and web grounding stay on the `gemini` (API) backend, where they're free.
+    if args.backend in ("fm", "ollama", "gemini-cli"):
         if args.file:
-            log(f"ERROR: --file is only on the gemini backend (PDFs/images need Gemini). "
+            log(f"ERROR: --file is only on the gemini (API) backend (PDFs/images need it). "
                 f"Use --backend gemini, or paste text into the prompt for {args.backend}.")
             sys.exit(2)
         if args.search:
-            log("ERROR: --search (web grounding) is only on the gemini backend.")
+            log("ERROR: --search (web grounding) is only on the gemini (API) backend.")
             sys.exit(2)
         if args.backend == "fm":
             text = call_fm(prompt, args.system, args.temperature)
-        else:
+        elif args.backend == "ollama":
             text = call_ollama(prompt, args.system, args.temperature, args.model, args.max_tokens)
+        else:
+            text = call_gemini_cli(prompt, args.system, args.temperature, args.model,
+                                   preflight=args.preflight)
         print(text)
         sys.stdout.flush()
         return
