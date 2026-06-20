@@ -197,10 +197,11 @@ when their specific edge matters.
   `fm` backend just errors and you stay on `gemini`/`ollama`. (README has notes on building one.)
 - `ollama` needs `ollama serve` running and a model pulled. **First-time local setup is disk-aware:**
   run `bash "$SKILL/scripts/setup_local_model.sh"` — it reads your free disk and offers a model tier
-  sized to it (7B ~5 GB / 14B ~9 GB / 32B ~20 GB), then pulls your pick. The default model is
-  `qwen2.5-coder:14b` (the bake-off's best-balance local coder); for fast, light text use
-  `--model llama3.2:3b`. **If the user wants the local backend and no coder model is installed, offer
-  this tiered choice — sized to their actual `df` free space — before pulling; don't assume a size.**
+  sized to it (qwen3-coder:30b ~18 GB / qwen2.5-coder:14b ~9 GB / 7B ~5 GB), then pulls your pick. The
+  default model is `qwen3-coder:30b` (the bake-off's best local coder — a 30B MoE, 3B active, so fast);
+  lighter options `--model qwen2.5-coder:14b` or `--model llama3.2:3b`. **If the user wants the local
+  backend and no coder model is installed, offer this tiered choice — sized to their actual `df` free
+  space — before pulling; don't assume a size.**
 
 **No Gemini account? You don't need one.** If `GEMINI_API_KEY` isn't set, don't dead-end — run fully
 local with no account via `--backend ollama`. Offer **Gemma** (Google's open model: `gemma3:12b` /
@@ -229,12 +230,14 @@ tasks and the only model that got concurrency *and* validation right in the desi
 the local models each dropped tasks or shipped subtler design flaws. So for **code generation,
 design, refactors, and bug-review, use `--model pro`**; Flash stays the default for bulk *text*.
 
-**Best offline/local coder = `--backend ollama --model qwen2.5-coder:14b`.** In the bake-off it
-tied the much larger gemma3:27b on correctness (4/5), edged it on design (it got concurrency
-*right* where gemma shipped a race), and ran ~3× faster in ~half the size. Use it when the work
-must stay private/offline or run unlimited — accepting it's below Pro (thin type-validation,
-wall-clock not monotonic), so verify with extra care. Full results: the bake-off `FINDINGS.md`
-in the skill's workspace. And regardless of model: **the model drafts, you verify** — every backend
+**Best offline/local coder = `--backend ollama --model qwen3-coder:30b`** (the default). In the
+bake-off it tied `qwen2.5-coder:14b` on correctness (4/5) but ran **~2× faster** (a 30B MoE with only
+3B active) and clearly beat it on design — real encapsulation, `time.monotonic()`, and fuller
+validation where 14b was terser and used wall-clock. The trade-off is disk: 18 GB vs 9 GB. For a
+lighter footprint, `qwen2.5-coder:14b` is the solid runner-up. Use local when the work must stay
+private/offline or run unlimited — accepting it's below Pro, so verify with extra care. Full results:
+the bake-off `FINDINGS.md` in the skill's workspace. And regardless of model: **the model drafts,
+you verify** — every backend
 in the bake-off, the winner included, shipped at least one bug a review had to catch.
 
 ## Token economy

@@ -62,14 +62,14 @@ It offers, by available disk:
 
 | For | Model | ~Size | Notes |
 |---|---|---|---|
-| **Code** | `qwen2.5-coder:7b` | 5 GB | small & fast |
-| **Code** | `qwen2.5-coder:14b` | 9 GB | **recommended** — best balance (benchmarked) |
-| **Code** | `qwen2.5-coder:32b` | 20 GB | best local code quality, if you have room |
+| **Code** | `qwen3-coder:30b` | 18 GB | **recommended** — best local coder (30B MoE, 3B active, fast; benchmarked) |
+| **Code** | `qwen2.5-coder:14b` | 9 GB | lighter, solid runner-up |
+| **Code** | `qwen2.5-coder:7b` | 5 GB | smallest & fastest |
 | **General / no-account Gemini alternative** | `gemma3:12b` | 8 GB | well-rounded |
 | **General** | `gemma3:27b` | 17 GB | strongest Gemma |
 | Light text | `llama3.2:3b` | 2 GB | tiny floor |
 
-Then use `--backend ollama` (defaults to `qwen2.5-coder:14b`, or set `OLLAMA_MODEL`).
+Then use `--backend ollama` (defaults to `qwen3-coder:30b`, or set `OLLAMA_MODEL`).
 
 ### Option C — Apple Foundation Models (advanced, opt-in)
 
@@ -93,13 +93,13 @@ SKILL="${SKILL:-$HOME/.claude/skills/agent-smith}"
 
 python3 "$SKILL/scripts/gemini.py" --search "What's new in the latest Python release?"
 python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize the findings as bullets"
-python3 "$SKILL/scripts/gemini.py" --backend ollama --model qwen2.5-coder:14b "Draft a function that ..."
+python3 "$SKILL/scripts/gemini.py" --backend ollama --model qwen3-coder:30b "Draft a function that ..."
 ```
 
 ## Which model for what (from the bundled coding bake-off)
 
 - **Best coder overall:** Gemini `--model pro` (cloud) — swept correctness + design.
-- **Best local/offline coder:** `qwen2.5-coder:14b` (ties a much larger model, half the size).
+- **Best local/offline coder:** `qwen3-coder:30b` (30B MoE, 3B active — ties qwen2.5-coder:14b on correctness but ~2× faster + better design). `qwen2.5-coder:14b` is the lighter runner-up.
 - **General text, no account:** Gemma (`gemma3:12b`/`27b`).
 - **Always:** the model drafts, **you verify.** Every model tested shipped at least one bug a review caught.
 

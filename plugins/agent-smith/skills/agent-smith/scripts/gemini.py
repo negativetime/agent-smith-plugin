@@ -232,7 +232,7 @@ def call_fm(prompt, system, temperature):
 
 def call_ollama(prompt, system, temperature, model, max_tokens):
     """Local model via Ollama (http://localhost:11434). Free, unlimited, offline."""
-    model = model or os.environ.get("OLLAMA_MODEL") or "qwen2.5-coder:14b"
+    model = model or os.environ.get("OLLAMA_MODEL") or "qwen3-coder:30b"
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
@@ -517,7 +517,7 @@ def main():
                          "fm (Apple on-device, free/offline/private) | ollama (local model, free/unlimited).")
     ap.add_argument("--model", default=None,
                     help="gemini: flash|pro|flash-lite|<name> (default flash). "
-                         "ollama: model tag (default qwen2.5-coder:14b). gemini-cli: full CLI model name "
+                         "ollama: model tag (default qwen3-coder:30b). gemini-cli: full CLI model name "
                          "or omit for the CLI's default. Ignored for fm.")
     ap.add_argument("--system", help="System instruction (role/style/constraints).")
     ap.add_argument("--file", action="append", default=[], metavar="PATH",

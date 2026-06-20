@@ -41,9 +41,9 @@ if [ -z "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ]; then
 fi
 
 recommend=""
-if   [ "$free_gb" -ge 25 ]; then recommend="3 for code (qwen2.5-coder:32b) or 5 for general (gemma3:27b)"
+if   [ "$free_gb" -ge 22 ]; then recommend="1 for code (qwen3-coder:30b) or 5 for general (gemma3:27b)"
 elif [ "$free_gb" -ge 12 ]; then recommend="2 for code (qwen2.5-coder:14b) or 4 for general (gemma3:12b)"
-elif [ "$free_gb" -ge 7  ]; then recommend="1 for code (qwen2.5-coder:7b) or 4 for general (gemma3:12b)"
+elif [ "$free_gb" -ge 7  ]; then recommend="3 for code (qwen2.5-coder:7b) or 4 for general (gemma3:12b)"
 else                             recommend="6 (llama3.2:3b) — low on space"
 fi
 
@@ -51,9 +51,9 @@ echo "Best fit for your free space: ${recommend}"
 echo
 echo "Choose a local model (bigger = better, needs more space):"
 echo "  -- for CODE (best local coders, from agent-smith's bake-off) --"
-echo "  1) qwen2.5-coder:7b    ~5 GB   small & fast"
-echo "  2) qwen2.5-coder:14b   ~9 GB   recommended for code — best balance (benchmarked default)"
-echo "  3) qwen2.5-coder:32b   ~20 GB  best local code quality, if you have the room"
+echo "  1) qwen3-coder:30b     ~18 GB  recommended — best local coder (30B MoE, 3B active, fast; benchmarked default)"
+echo "  2) qwen2.5-coder:14b   ~9 GB   lighter, solid runner-up"
+echo "  3) qwen2.5-coder:7b    ~5 GB   smallest & fastest"
 echo "  -- for GENERAL text / no-Gemini-account use (Google's open Gemma) --"
 echo "  4) gemma3:12b          ~8 GB   well-rounded general model"
 echo "  5) gemma3:27b          ~17 GB  strongest general Gemma, if you have space"
@@ -64,9 +64,9 @@ printf "Enter 1-7: "
 read -r choice
 
 case "$choice" in
-  1) model="qwen2.5-coder:7b";  need=8  ;;
+  1) model="qwen3-coder:30b";   need=22 ;;
   2) model="qwen2.5-coder:14b"; need=12 ;;
-  3) model="qwen2.5-coder:32b"; need=24 ;;
+  3) model="qwen2.5-coder:7b";  need=8  ;;
   4) model="gemma3:12b";        need=11 ;;
   5) model="gemma3:27b";        need=21 ;;
   6) model="llama3.2:3b";       need=4  ;;
@@ -88,8 +88,8 @@ ollama pull "$model"
 
 echo
 echo "Done. ${model} is installed."
-if [ "$model" != "qwen2.5-coder:14b" ]; then
-  echo "agent-smith's Ollama default is qwen2.5-coder:14b. To make ${model} the default instead,"
+if [ "$model" != "qwen3-coder:30b" ]; then
+  echo "agent-smith's Ollama default is qwen3-coder:30b. To make ${model} the default instead,"
   echo "set:  export OLLAMA_MODEL=${model}   (add it to your shell profile to persist)."
   echo "Or pass it explicitly:  --backend ollama --model ${model}"
 fi
