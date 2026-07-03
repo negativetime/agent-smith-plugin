@@ -189,30 +189,32 @@ when their specific edge matters.
   your subscription/account quota instead of the metered API key — the way to keep using top Gemini
   models when free-tier 429s bite. **One-time setup:** run `gemini` once and choose *"Login with
   Google."* The skill hides `GEMINI_API_KEY` from the CLI so it uses that login; set
-  `GEMINI_CLI_USE_API_KEY=1` to use the key instead. Text-only; it auto-applies a deny-all-tools
-  policy so it can only generate (never edits files) and runs ~25% leaner.
+  `GEMINI_CLI_USE_API_KEY=1` to use the key instead. Text-only (no `--file`/`--search`).
 - `fm` (Apple Foundation Models, macOS 26+ with Apple Intelligence) is **opt-in and not bundled** —
   this repo ships no binary on purpose (don't run opaque executables from strangers). It needs an
   `fm_helper` you supply; point the skill at it with `FM_HELPER=/path/to/fm_helper`. If unset, the
   `fm` backend just errors and you stay on `gemini`/`ollama`. (README has notes on building one.)
 - `ollama` needs `ollama serve` running and a model pulled. **First-time local setup is disk-aware:**
   run `bash "$SKILL/scripts/setup_local_model.sh"` — it reads your free disk and offers a model tier
-  sized to it (qwen3-coder:30b ~18 GB / qwen2.5-coder:14b ~9 GB / 7B ~5 GB), then pulls your pick. The
-  default model is `qwen3-coder:30b` (the bake-off's best local coder — a 30B MoE, 3B active, so fast);
-  lighter options `--model qwen2.5-coder:14b` or `--model llama3.2:3b`. **If the user wants the local
-  backend and no coder model is installed, offer this tiered choice — sized to their actual `df` free
-  space — before pulling; don't assume a size.**
+  sized to it (qwen3-coder:30b ~18 GB / qwen2.5-coder:14b ~9 GB / 7B ~5 GB), then pulls your pick.
+  Default model is `qwen3-coder:30b` (fast drafts: 30B MoE, 3B active, 2–8s one-shot). For
+  **quality-critical code, design, or structured extraction use `--model gemma4:26b`** — the
+  2026-07-01 agent-gym sweep's local champion (12/12 incl. design; slower one-shot, 20–90s,
+  thinking overhead). Lighter: `--model qwen2.5-coder:14b` (9 GB) or `--model llama3.2:3b`
+  (fast text only). **If the user wants local and no coder model is installed, offer the tiered
+  choice — sized to their actual `df` free space — before pulling; don't assume a size.**
+
+```bash
+python3 "$SKILL/scripts/gemini.py" --backend gemini-cli --model pro "Draft a function that ...: ..."
+python3 "$SKILL/scripts/gemini.py" --backend fm "Rewrite this paragraph more concisely: ..."
+python3 "$SKILL/scripts/gemini.py" --backend ollama "Draft a Python function that ...: ..."
+```
 
 **No Gemini account? You don't need one.** If `GEMINI_API_KEY` isn't set, don't dead-end — run fully
 local with no account via `--backend ollama`. Offer **Gemma** (Google's open model: `gemma3:12b` /
 `gemma3:27b`) for general text, or **qwen2.5-coder** for code. Point the user at
 `scripts/setup_local_model.sh` to pick one sized to their disk. (Getting a free key at
 https://aistudio.google.com/apikey is still the faster, stronger path — mention it — but it's optional.)
-
-```bash
-python3 "$SKILL/scripts/gemini.py" --backend fm "Rewrite this paragraph more concisely: ..."
-python3 "$SKILL/scripts/gemini.py" --backend ollama "Draft a Python function that ...: ..."
-```
 
 ## Model choice (auto-tier)
 
@@ -230,15 +232,40 @@ tasks and the only model that got concurrency *and* validation right in the desi
 the local models each dropped tasks or shipped subtler design flaws. So for **code generation,
 design, refactors, and bug-review, use `--model pro`**; Flash stays the default for bulk *text*.
 
-**Best offline/local coder = `--backend ollama --model qwen3-coder:30b`** (the default). In the
-bake-off it tied `qwen2.5-coder:14b` on correctness (4/5) but ran **~2× faster** (a 30B MoE with only
-3B active) and clearly beat it on design — real encapsulation, `time.monotonic()`, and fuller
-validation where 14b was terser and used wall-clock. The trade-off is disk: 18 GB vs 9 GB. For a
-lighter footprint, `qwen2.5-coder:14b` is the solid runner-up. Use local when the work must stay
-private/offline or run unlimited — accepting it's below Pro, so verify with extra care. Full results:
-the bake-off `FINDINGS.md` in the skill's workspace. And regardless of model: **the model drafts,
-you verify** — every backend
-in the bake-off, the winner included, shipped at least one bug a review had to catch.
+**Best offline/local model for quality = `--backend ollama --model gemma4:26b`** (17 GB MoE,
+~3.8B active; native tools + vision + thinking). In the 2026-07-01 agent-gym evaluation
+(`~/Python/agent-gym/BASELINE-2026-07-01.md`) it swept all 12 correctness tasks — including
+the one `qwen3-coder:30b` missed — and won the design rubric 22/24 vs 17.5/24, one point
+behind gemini-pro's ~24/24 ceiling. Earned tiers (two consecutive runs): **trusted** for
+code-gen, structured extraction, and repo bug-fix/feature edits; **assist** (verify fully)
+for whole-app builds. Trade-off: thinking makes one-shot drafts slower (20–90s vs
+qwen3-coder's 2–8s), so **`qwen3-coder:30b` stays the ollama default for fast bulk drafts**.
+`qwen2.5-coder:14b` = lighter backup (agentic via JSON-fallback, 3/5). Use local when work
+must stay private/offline or run unlimited; escalate to `pro` when a task resists local
+attempts. And regardless of model: **the model drafts, you verify** — every backend
+evaluated, winners included, has shipped at least one bug a review had to catch.
+
+## Agentic offload — smith_agent.py (sandboxed tool loop)
+
+For multi-step *repo* tasks — fix a bug in a small project, add a feature, build a working
+app from a spec — one-shot generation isn't enough. `scripts/smith_agent.py` runs a model
+in a tool loop (list_files / read_file / write_file / run_command / finish) sandboxed to a
+working directory, iterating until its own verification passes:
+
+```bash
+python3 "$SKILL/scripts/smith_agent.py" --model gemma4:26b \
+  --workdir /path/to/scratch-project --prompt-file task.txt
+# cloud escalation (frontier quality, ~5x slower, rate-limit risk):
+#   --backend gemini --model pro
+```
+
+Rules of engagement: point it ONLY at a scratch/sandbox directory (it executes
+model-generated shell there — never at a live repo); write the task like a good ticket
+(spec, exact output formats, how to verify); seed a `test_public.py` so the agent has an
+executable definition of done; **verify the result yourself** before using it. Earned
+trust (agent-gym 2026-07-01): gemma4:26b trusted on repo edits, assist on app builds;
+gemini backend 5/5 quality but 300–640s/task with occasional mid-loop 503s — escalation
+path, not default. Canonical source + eval harness: `~/Python/agent-gym/`.
 
 ## Token economy
 
