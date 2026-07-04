@@ -516,6 +516,60 @@ def _ledger(rec):
         pass
 
 
+def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url):
+    """Any OpenAI-compatible /chat/completions endpoint: Groq, Cerebras, OpenRouter,
+    GitHub Models, xAI — or local servers (ollama's /v1, mlx_lm server, LM Studio).
+    Auth = Bearer OPENAI_API_KEY if set (local servers usually need none)."""
+    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
+    if not base:
+        log("ERROR: --backend openai needs --base-url or OPENAI_BASE_URL "
+            "(e.g. https://api.groq.com/openai/v1 or http://localhost:11434/v1).")
+        sys.exit(2)
+    if not model:
+        log("ERROR: --backend openai needs --model (endpoint-specific, e.g. "
+            "openai/gpt-oss-120b on Groq).")
+        sys.exit(2)
+    msgs = ([{"role": "system", "content": system}] if system else [])
+    msgs.append({"role": "user", "content": prompt})
+    body = {"model": model, "messages": msgs}
+    if temperature is not None:
+        body["temperature"] = temperature
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("OPENAI_API_KEY")
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    resp = None
+    for attempt in range(3):
+        req = urllib.request.Request(f"{base}/chat/completions", method="POST",
+                                     data=json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r:
+                resp = json.loads(r.read().decode())
+            break
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode("utf-8", "replace")[:300]
+            if e.code in (429, 500, 502, 503) and attempt < 2:
+                wait = 4 * (attempt + 1)
+                log(f"HTTP {e.code} from endpoint (free tiers rate-limit); retry in {wait}s ...")
+                time.sleep(wait)
+                continue
+            log(f"ERROR: {base} HTTP {e.code}: {msg}")
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            log(f"ERROR: can't reach {base} ({e}).")
+            sys.exit(1)
+    text = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+    u = resp.get("usage") or {}
+    log("\n--- openai-compat meta ---")
+    log(f"endpoint: {base}  model: {model}"
+        + ("  auth: bearer" if key else "  auth: none"))
+    if u:
+        log(f"tokens: prompt={u.get('prompt_tokens')} output={u.get('completion_tokens')}")
+    return text
+
+
 def run_batch(args, prompt):
     """--batch MANIFEST: run one prompt over many files on the LOCAL backend, writing one
     output file per item — Claude stays out of the per-item loop entirely (zero tokens/item).
@@ -605,10 +659,16 @@ def main():
 
     ap = argparse.ArgumentParser(description="Query Gemini from the shell.")
     ap.add_argument("prompt", nargs="?", help="Prompt text. If omitted, read from stdin.")
-    ap.add_argument("--backend", choices=["gemini", "gemini-cli", "fm", "ollama"], default="gemini",
+    ap.add_argument("--backend", choices=["gemini", "gemini-cli", "fm", "ollama", "openai"],
+                    default="gemini",
                     help="gemini (cloud API, default — files/grounding/JSON) | gemini-cli (drives the "
                          "logged-in Gemini CLI on your OAuth/subscription quota — no API rate limits) | "
-                         "fm (Apple on-device, free/offline/private) | ollama (local model, free/unlimited).")
+                         "fm (Apple on-device, free/offline/private) | ollama (local model, free/unlimited) | "
+                         "openai (ANY OpenAI-compatible endpoint via --base-url: Groq/Cerebras/OpenRouter/"
+                         "GitHub Models/local servers; auth = OPENAI_API_KEY env if set).")
+    ap.add_argument("--base-url", default=None, dest="base_url",
+                    help="openai backend endpoint base (or OPENAI_BASE_URL env), "
+                         "e.g. https://api.groq.com/openai/v1 or http://localhost:11434/v1")
     ap.add_argument("--model", default=None,
                     help="gemini: flash|pro|flash-lite|<name> (default flash). "
                          "ollama: model tag (default qwen3-coder:30b). gemini-cli: full CLI model name "
@@ -656,7 +716,7 @@ def main():
 
     # Text-only backends: on-device Apple FM, a local Ollama model, or the OAuth'd Gemini CLI.
     # File ingest and web grounding stay on the `gemini` (API) backend, where they're free.
-    if args.backend in ("fm", "ollama", "gemini-cli"):
+    if args.backend in ("fm", "ollama", "gemini-cli", "openai"):
         images = []
         if args.file:
             # Local vision: IMAGE files ride the ollama backend (gemma4:26b has native
@@ -688,6 +748,10 @@ def main():
             model_eff = args.model or ("gemma4:26b" if images else "qwen3-coder:30b")
             text = call_ollama(prompt, args.system, args.temperature, model_eff,
                                args.max_tokens, images)
+        elif args.backend == "openai":
+            model_eff = args.model or "unset"
+            text = call_openai_compat(prompt, args.system, args.temperature, args.model,
+                                      args.max_tokens, args.base_url)
         else:
             model_eff = args.model or "default"
             text = call_gemini_cli(prompt, args.system, args.temperature, args.model,

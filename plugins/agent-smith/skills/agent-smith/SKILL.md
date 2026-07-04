@@ -188,7 +188,8 @@ when their specific edge matters.
 | `gemini` *(default)* | Google cloud (API key) | free tier, **rate-limited** | highest (frontier 3.x) | **yes** — `--file`, `--search`, JSON schema | anything substantial; the **only** one that ingests PDFs/images or does live web research |
 | `gemini-cli` | Google cloud (your OAuth login) | your subscription/account quota, **no API rate limit** | highest (same Gemini models) | no (text only) | same Gemini quality but **free-tier 429s are throttling you** — runs on the quota you already have via the CLI login |
 | `fm` | this Mac (Apple Intelligence) | free, **no quota** | small (~3B) | no (text only) | data must stay **private/offline**; quick simple bulk you don't want to spend Gemini quota on |
-| `ollama` | this Mac (local model) | free, **no quota** | mid (model-dependent) | no (text only) | offline/private with better quality than `fm`; **unlimited** high-volume bulk with no rate limits |
+| `ollama` | this Mac (local model) | free, **no quota** | mid (model-dependent) | images yes (vision, gemma4); no docs/web | offline/private with better quality than `fm`; **unlimited** high-volume bulk with no rate limits |
+| `openai` | ANY OpenAI-compatible endpoint (`--base-url`) | varies — **free tiers exist** (Groq, Cerebras, OpenRouter `:free`, GitHub Models) | endpoint-dependent (Groq hosts gpt-oss-120b free) | no (text only) | burst capacity beyond Gemini's free tier; frontier-adjacent open models at zero cost; also drives local servers (ollama `/v1`, mlx_lm) |
 
 - **Gemini stays the brain.** The API (`gemini`) is the most capable and the only one that ingests
   files or researches the web. Use the others for *text-in → text-out* work you already hold —
@@ -228,6 +229,20 @@ when their specific edge matters.
 python3 "$SKILL/scripts/gemini.py" --backend gemini-cli --model pro "Draft a function that ...: ..."
 python3 "$SKILL/scripts/gemini.py" --backend fm "Rewrite this paragraph more concisely: ..."
 python3 "$SKILL/scripts/gemini.py" --backend ollama "Draft a Python function that ...: ..."
+```
+
+- `openai` is the **generic socket**: any provider or server speaking the OpenAI
+  `/chat/completions` dialect. Set `--base-url` (or `OPENAI_BASE_URL`) + `--model`; auth is
+  `OPENAI_API_KEY` env if the endpoint needs one (local servers don't). Built-in 429/5xx retry
+  (free tiers rate-limit). Examples: Groq `https://api.groq.com/openai/v1` with
+  `--model openai/gpt-oss-120b` (free-tier frontier-adjacent); OpenRouter
+  `https://openrouter.ai/api/v1` with a `:free` model; local `http://localhost:11434/v1`.
+  **Caveat: free cloud tiers commonly train on your data — keep private work on `ollama`/`fm`.**
+
+```bash
+python3 "$SKILL/scripts/gemini.py" --backend openai \
+  --base-url https://api.groq.com/openai/v1 --model openai/gpt-oss-120b \
+  "Draft a data-model for ..."
 ```
 
 **No Gemini account? You don't need one.** If `GEMINI_API_KEY` isn't set, don't dead-end — run fully
