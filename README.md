@@ -17,6 +17,16 @@ treated as a deliverable until it's been reviewed.
 - **Digesting big inputs** — summarize/extract/classify long PDFs, transcripts, logs, CSVs
 - **Bulk transforms** — classify or rewrite many records
 - **First drafts** — plans, proposals, marketing copy, config/IaC boilerplate, code + tests
+- **Code from a spec** — a new module, class, CLI tool, or test suite; porting/translating code
+- **Agentic sandbox builds** — fix-a-bug / add-a-feature / build-a-small-app: `smith_agent.py`
+  runs a local model in a sandboxed tool loop (list/read/write/run/finish) until its own
+  verification passes
+- **Screenshot triage (local vision)** — `--file shot.png --backend ollama`: UI QA, error
+  dialogs, "what's broken here?" — free, private, unlimited
+- **Batch sweeps** — `--batch manifest.txt`: one prompt over many files (text or images),
+  per-item output files, ONE summary back — zero per-item orchestration cost
+- **A usage ledger** — every run logs one JSON line (`data/usage.jsonl`); check what your
+  fleet actually did with `scripts/usage_report.py`
 
 It is **not** for short/interactive work, correctness-critical debugging, or the *execution* half of
 a task (deploying, committing, posting) — those stay with Claude or a script you control.
@@ -71,7 +81,24 @@ It offers, by available disk:
 
 Then use `--backend ollama` (defaults to `qwen3-coder:30b`, or set `OLLAMA_MODEL`).
 
-### Option C — Apple Foundation Models (advanced, opt-in)
+### Option C — Free cloud via the generic OpenAI socket
+
+`--backend openai` speaks to **any OpenAI-compatible endpoint** — several have genuinely
+useful free tiers. Standout: **Groq** hosts OpenAI's open-weight `gpt-oss-120b` free, at
+extreme speed:
+
+```bash
+export GROQ_API_KEY=your_groq_key       # free at console.groq.com
+python3 "$SKILL/scripts/gemini.py" --backend openai --base-url groq \
+  --model openai/gpt-oss-120b "Draft a data-model for ..."
+```
+
+Shorthand base-urls: `groq` | `openrouter` | `openai` | `ollama` (or any full `.../v1` URL).
+Auth is `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`); local servers need none. Built-in 429 retry.
+**Caveat: free cloud tiers commonly reserve the right to train on your data — keep private
+work on the local backends.**
+
+### Option D — Apple Foundation Models (advanced, opt-in)
 
 The `fm` backend runs on-device on **macOS 26+ with Apple Intelligence**. **No binary ships with this
 plugin** (don't run opaque executables from strangers) — you supply your own `fm_helper`: a tiny Swift
@@ -94,14 +121,39 @@ SKILL="${SKILL:-$HOME/.claude/skills/agent-smith}"
 python3 "$SKILL/scripts/gemini.py" --search "What's new in the latest Python release?"
 python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize the findings as bullets"
 python3 "$SKILL/scripts/gemini.py" --backend ollama --model qwen3-coder:30b "Draft a function that ..."
+
+# local vision: what's wrong with this screenshot?
+python3 "$SKILL/scripts/gemini.py" --backend ollama --file shot.png "Anything visibly broken?"
+
+# batch: one prompt over many files, zero per-item cost
+python3 "$SKILL/scripts/gemini.py" --backend ollama --batch files.txt --out-dir out "Classify: ..."
+
+# agentic: build/fix something in a SCRATCH dir until its own tests pass
+python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b --workdir /tmp/scratch --prompt-file task.txt
+
+# what has the fleet been doing?
+python3 "$SKILL/scripts/usage_report.py" --today
 ```
 
-## Which model for what (from the bundled coding bake-off)
+## Which model for what (measured, not vibes)
 
-- **Best coder overall:** Gemini `--model pro` (cloud) — swept correctness + design.
-- **Best local/offline coder:** `qwen3-coder:30b` (30B MoE, 3B active — ties qwen2.5-coder:14b on correctness but ~2× faster + better design). `qwen2.5-coder:14b` is the lighter runner-up.
-- **General text, no account:** Gemma (`gemma3:12b`/`27b`).
-- **Always:** the model drafts, **you verify.** Every model tested shipped at least one bug a review caught.
+Every assignment below comes from the author's eval harness — hidden-test graded tasks
+across code-gen, structured extraction, repo edits, app builds, and a blind-judged design
+rubric. Trust is *earned per capability*, and re-earned when models change.
+
+| Task | Model | Why |
+|---|---|---|
+| Quality code: modules, extraction, repo edits, **app builds** | `gpt-oss:20b` (13 GB, `ollama pull gpt-oss:20b`) | the only model to sweep the harness twice consecutively — incl. agentic app builds. Watch-item in review: reasoning residue (commented-out debug prints, dead branches) |
+| Vision + design polish | `gemma4:26b` (17 GB) | reads screenshots/dialogs/charts exactly (window-sized; tile tall captures — small text gets confidently invented); held the blind design rubric 21 : 19.5 |
+| Fast bulk drafts | `qwen3-coder:30b` (18 GB) | 2–8s one-shots vs the reasoners' 13–90s |
+| Lighter machines | `qwen2.5-coder:14b` (9 GB) | solid runner-up at half the size |
+| Tiny text bulk | `llama3.2:3b` (2 GB) | floor tier; not for code or agents |
+| Research / big files / hardest cloud drafts | Gemini `--model pro` | still the ceiling; the only backend with file ingest + web grounding |
+| Free frontier-adjacent burst | Groq `openai/gpt-oss-120b` via `--backend openai` | when you want big-model quality without touching Gemini quota |
+
+- **Always:** the model drafts, **Claude (or you) verifies.** Every model tested — winners
+  included — shipped at least one bug a review caught. The point isn't a perfect model;
+  it's a pipeline where imperfection is caught before it counts.
 
 ## Platform support
 
