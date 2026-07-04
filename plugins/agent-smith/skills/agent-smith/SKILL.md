@@ -11,8 +11,11 @@ description: >-
   write-up; website, landing-page, or marketing copy (blog, FAQ, headlines, first-draft
   HTML/CSS); config or infrastructure boilerplate as text (wrangler.toml, Worker scaffolds,
   Dockerfiles, CI YAML, IaC modules); turning one announcement into many platform-specific
-  social or marketing posts; or any mass first-draft code or boilerplate. Also trigger when
-  the user says "use Gemini" or asks to save Claude tokens. Gemini drafts; Claude scopes,
+  social or marketing posts; or any mass first-draft code or boilerplate. Trigger for CODE
+  work too: drafting a new module, class, CLI tool, or test suite from a clear spec; porting
+  or translating code; or a multi-step scratch-sandbox build (fix-a-bug, add-a-feature,
+  build-a-small-app) via the bundled smith_agent.py tool loop. Also trigger when the user
+  says "use Gemini" or "agent-smith", mentions the local fleet, or asks to save Claude tokens. Gemini drafts; Claude scopes,
   cross-checks, integrates, and delivers. Do NOT use for short/quick/interactive work, small
   edits, correctness-critical debugging, or security-sensitive tasks — and never for the
   EXECUTION half of a task: deploying to Cloudflare, posting to a live account, committing or
@@ -143,6 +146,12 @@ python3 "$SKILL/scripts/gemini.py" --file invoices.pdf --schema schema.json "Ext
 # Code draft with a role
 python3 "$SKILL/scripts/gemini.py" --model pro --system "Senior Python engineer" \
   "Write a function that parses ISO-8601 durations into seconds"
+
+# BATCH: one operation over many files, LOCAL + zero Claude tokens per item.
+# Manifest = one path per line; images ride vision (auto gemma4), text files append
+# to the prompt; per-item results -> --out-dir/<name>.out.txt; ONE JSON summary back.
+python3 "$SKILL/scripts/gemini.py" --backend ollama --batch shots_manifest.txt \
+  --out-dir triage "One line: what does this show, and is anything visibly broken?"
 ```
 
 **Windows (PowerShell)** — same flags, just the `python` launcher and the Windows path; pipe stdin
@@ -199,10 +208,21 @@ when their specific edge matters.
   sized to it (qwen3-coder:30b ~18 GB / qwen2.5-coder:14b ~9 GB / 7B ~5 GB), then pulls your pick.
   Default model is `qwen3-coder:30b` (fast drafts: 30B MoE, 3B active, 2–8s one-shot). For
   **quality-critical code, design, or structured extraction use `--model gemma4:26b`** — the
-  2026-07-01 agent-gym sweep's local champion (12/12 incl. design; slower one-shot, 20–90s,
-  thinking overhead). Lighter: `--model qwen2.5-coder:14b` (9 GB) or `--model llama3.2:3b`
-  (fast text only). **If the user wants local and no coder model is installed, offer the tiered
-  choice — sized to their actual `df` free space — before pulling; don't assume a size.**
+  measured local champion in the author's eval harness (12/12 correctness incl. design; slower
+  one-shot, 20–90s, thinking overhead). Lighter: `--model qwen2.5-coder:14b` (9 GB) or
+  `--model llama3.2:3b` (fast text only). **If the user wants local and no coder model is
+  installed, offer the tiered choice — sized to their actual `df` free space — before pulling.**
+  **Local vision:** `--backend ollama --file shot.png "what's wrong with this layout?"` — image
+  files (png/jpg/gif/webp, repeatable) go to gemma4:26b (auto-picked when images are present;
+  it's the vision-capable model). Free, unlimited, private — right for screenshot triage / UI QA /
+  error-dialog reading, and for HIGH-VOLUME image sweeps where the gemini API's rate limits
+  would bite. PDFs/docs still need `--backend gemini`.
+  **Measured caveat (10-item spot eval):** window-sized screenshots, dialogs, charts, and
+  code renders showed EXACT text fidelity (incl. hex error codes and prices) — solid for bulk
+  triage. BUT on full-page TALL captures (e.g. 1200×5300 scrolling screenshots) small text
+  gets **confidently fabricated** (invented brand/nav/button names while big headings stayed
+  exact). Rule: **crop or tile scrolling captures to viewport-size before sending; never act
+  on small-text claims from a tall image without a crop.**
 
 ```bash
 python3 "$SKILL/scripts/gemini.py" --backend gemini-cli --model pro "Draft a function that ...: ..."
@@ -233,16 +253,15 @@ the local models each dropped tasks or shipped subtler design flaws. So for **co
 design, refactors, and bug-review, use `--model pro`**; Flash stays the default for bulk *text*.
 
 **Best offline/local model for quality = `--backend ollama --model gemma4:26b`** (17 GB MoE,
-~3.8B active; native tools + vision + thinking). In the 2026-07-01 agent-gym evaluation
-(`~/Python/agent-gym/BASELINE-2026-07-01.md`) it swept all 12 correctness tasks — including
+~3.8B active; native tools + vision + thinking). In the author's eval-harness testing
+it swept all 12 correctness tasks — including
 the one `qwen3-coder:30b` missed — and won the design rubric 22/24 vs 17.5/24, one point
 behind gemini-pro's ~24/24 ceiling. Earned tiers (two consecutive runs): **trusted** for
 code-gen, structured extraction, and repo bug-fix/feature edits; **assist** (verify fully)
 for whole-app builds. Trade-off: thinking makes one-shot drafts slower (20–90s vs
 qwen3-coder's 2–8s), so **`qwen3-coder:30b` stays the ollama default for fast bulk drafts**.
-`qwen2.5-coder:14b` = lighter backup (agentic via JSON-fallback, 3/5). Use local when work
-must stay private/offline or run unlimited; escalate to `pro` when a task resists local
-attempts. And regardless of model: **the model drafts, you verify** — every backend
+`qwen2.5-coder:14b` = lighter backup (agentic via JSON-fallback). Use local when work must
+stay private/offline or run unlimited; escalate to `pro` when a task resists local attempts. And regardless of model: **the model drafts, you verify** — every backend
 evaluated, winners included, has shipped at least one bug a review had to catch.
 
 ## Agentic offload — smith_agent.py (sandboxed tool loop)
@@ -263,9 +282,20 @@ Rules of engagement: point it ONLY at a scratch/sandbox directory (it executes
 model-generated shell there — never at a live repo); write the task like a good ticket
 (spec, exact output formats, how to verify); seed a `test_public.py` so the agent has an
 executable definition of done; **verify the result yourself** before using it. Earned
-trust (agent-gym 2026-07-01): gemma4:26b trusted on repo edits, assist on app builds;
+trust (author's eval harness): gemma4:26b trusted on repo edits, assist on app builds;
 gemini backend 5/5 quality but 300–640s/task with occasional mid-loop 503s — escalation
-path, not default. Canonical source + eval harness: `~/Python/agent-gym/`.
+path, not default.
+
+## Progress tracking — the usage ledger
+
+Every `gemini.py` and `smith_agent.py` run appends one JSON line to
+`data/usage.jsonl` in this skill dir (timestamp, backend, model, size/turns, duration,
+outcome; `SMITH_LEDGER` env overrides the path). Logging is fail-safe — it can never
+break a run — and `gemini.py` currently records successful completions only, while
+`smith_agent.py` records every outcome including failures. To review delegation
+progress: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
+**Feed failures back:** a delegated task shape that failed in the real world deserves a
+regression test before you delegate that shape again.
 
 ## Token economy
 

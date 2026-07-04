@@ -7,7 +7,7 @@ plus finish, scoped to a sandbox working directory, and loops until the model
 finishes or the turn budget runs out. Pure stdlib.
 
 Every request/response is appended to a transcript JSONL — successful transcripts
-are future fine-tuning data (see PROGRAM.md §5).
+make useful future fine-tuning data.
 
 Usage:
     python3 agent_loop.py --model qwen3-coder:30b --workdir /path/to/sandbox \
@@ -47,6 +47,11 @@ Rules:
 - Provided tests may not cover every requirement. Before finishing, re-read the task
   and confirm EVERY stated requirement yourself (write and run your own checks if needed).
 - If a command fails, read the error, fix the cause, and try again.
+- Do not get stuck re-running commands. If you have run commands two or more times
+  without writing a file in between, or you see the same error twice, STOP inspecting:
+  re-read the relevant file and write_file a concrete fix. Re-running the same check
+  cannot change its result — only editing the code can. Every task needs you to WRITE
+  the change it asks for, not merely explore or repeatedly test.
 """
 
 TOOLS = [
@@ -267,9 +272,13 @@ def parse_fallback_calls(content):
     return calls
 
 
+MAX_GEN_TOKENS = 1600  # one tool call + a full file; caps temp-0 repetition loops
+
+
 def chat(model, messages, num_ctx):
     payload = {"model": model, "messages": messages, "tools": TOOLS, "stream": False,
-               "options": {"temperature": 0, "num_ctx": num_ctx}}
+               "options": {"temperature": 0, "num_ctx": num_ctx,
+                           "num_predict": MAX_GEN_TOKENS}}
     req = urllib.request.Request(OLLAMA + "/api/chat",
                                  json.dumps(payload).encode(),
                                  {"Content-Type": "application/json"})
@@ -314,6 +323,23 @@ def chat_gemini(model, contents, system):
     raise last_exc
 
 
+def chat_openai(model, messages, base_url):
+    """OpenAI-compatible chat (e.g. mlx_lm server). Plain text — no tool schemas;
+    the model must speak the JSON-fallback protocol from training/nudging."""
+    clean = [{"role": m["role"], "content": m.get("content", "")}
+             for m in messages if m.get("role") in ("system", "user", "assistant")]
+    payload = {"model": model, "messages": clean, "temperature": 0,
+               "max_tokens": MAX_GEN_TOKENS}
+    req = urllib.request.Request(base_url.rstrip("/") + "/v1/chat/completions",
+                                 json.dumps(payload).encode(),
+                                 {"Content-Type": "application/json",
+                                  "Authorization": "Bearer local"})
+    with urllib.request.urlopen(req, timeout=600) as r:
+        resp = json.load(r)
+    content = resp["choices"][0]["message"].get("content") or ""
+    return {"role": "assistant", "content": content}
+
+
 def gemini_parts_to_msg(parts):
     """Normalize Gemini reply parts to the message shape the loop understands."""
     text = "\n".join(p["text"] for p in parts
@@ -324,6 +350,22 @@ def gemini_parts_to_msg(parts):
     return {"role": "assistant", "content": text, "tool_calls": calls}
 
 
+def _ledger(rec):
+    """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
+    Progress tracking only — must never affect the run, so it swallows everything."""
+    try:
+        import datetime
+        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        path = os.environ.get("SMITH_LEDGER") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "usage.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -331,7 +373,9 @@ def main():
     ap.add_argument("--prompt-file", required=True)
     ap.add_argument("--max-turns", type=int, default=25)
     ap.add_argument("--num-ctx", type=int, default=32768)
-    ap.add_argument("--backend", choices=["ollama", "gemini"], default="ollama")
+    ap.add_argument("--backend", choices=["ollama", "gemini", "openai"], default="ollama")
+    ap.add_argument("--base-url", default="http://localhost:8080",
+                    help="openai backend server (e.g. mlx_lm server)")
     ap.add_argument("--transcript", default=None)
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
@@ -374,6 +418,9 @@ def main():
                 parts = chat_gemini(args.model, contents, SYSTEM)
                 contents.append({"role": "model", "parts": parts or [{"text": ""}]})
                 msg = gemini_parts_to_msg(parts)
+            elif backend == "openai":
+                msg = chat_openai(args.model, messages, args.base_url)
+                messages.append(msg)
             else:
                 resp = chat(args.model, messages, args.num_ctx)
                 msg = resp.get("message", {})
@@ -469,6 +516,8 @@ def main():
     if tlog:
         tlog.close()
     print(json.dumps(summary))
+    _ledger({"script": "smith_agent", "backend": backend, "model": args.model,
+             "workdir": workdir, "task": task[:120], **summary})
 
 
 if __name__ == "__main__":

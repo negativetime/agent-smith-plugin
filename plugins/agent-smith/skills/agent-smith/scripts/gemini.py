@@ -49,11 +49,7 @@ def log(*a):
 def api_key():
     k = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not k:
-        log("ERROR: GEMINI_API_KEY is not set. Three options: (1) get a free key at "
-            "https://aistudio.google.com/apikey and `export GEMINI_API_KEY=...`; (2) skip the "
-            "account and run local with `--backend ollama` (set up a model via "
-            "scripts/setup_local_model.sh, e.g. Gemma for general or qwen2.5-coder for code); or "
-            "(3) `--backend gemini-cli` to run Gemini on your Google login, no API key needed.")
+        log("ERROR: GEMINI_API_KEY is not set. Ask the user to export it, then retry.")
         sys.exit(2)
     return k
 
@@ -230,13 +226,17 @@ def call_fm(prompt, system, temperature):
     return d.get("answer", "")
 
 
-def call_ollama(prompt, system, temperature, model, max_tokens):
-    """Local model via Ollama (http://localhost:11434). Free, unlimited, offline."""
+def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
+    """Local model via Ollama (http://localhost:11434). Free, unlimited, offline.
+    images: optional list of base64-encoded image bytes (needs a vision model, e.g. gemma4:26b)."""
     model = model or os.environ.get("OLLAMA_MODEL") or "qwen3-coder:30b"
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt})
+    user_msg = {"role": "user", "content": prompt}
+    if images:
+        user_msg["images"] = images
+    msgs.append(user_msg)
     body = {"model": model, "messages": msgs, "stream": False}
     opts = {}
     if temperature is not None:
@@ -500,6 +500,100 @@ def call_gemini_cli(prompt, system, temperature, model, preflight=False):
     return answer
 
 
+def _ledger(rec):
+    """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
+    Progress tracking only — must never affect the run, so it swallows everything."""
+    try:
+        import datetime
+        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        path = os.environ.get("SMITH_LEDGER") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "usage.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def run_batch(args, prompt):
+    """--batch MANIFEST: run one prompt over many files on the LOCAL backend, writing one
+    output file per item — Claude stays out of the per-item loop entirely (zero tokens/item).
+    Manifest = one input path per line (# comments / blank lines skipped). Images
+    (png/jpg/jpeg/gif/webp) attach as vision input (auto-picks gemma4:26b); other files are
+    read as text (first 24K chars) and appended to the prompt. Per-item results land in
+    --out-dir as <name>.out.txt; ONE JSON summary prints to stdout."""
+    IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+    if args.backend != "ollama":
+        log("ERROR: --batch runs on --backend ollama only (free/unlimited is the point; "
+            "for a handful of metered API calls, loop gemini.py directly).")
+        sys.exit(2)
+    if args.file:
+        log("ERROR: --batch and --file don't combine — list the inputs in the manifest.")
+        sys.exit(2)
+    if not prompt.strip():
+        log("ERROR: --batch needs a prompt (the operation to run on each item).")
+        sys.exit(2)
+    t0 = time.time()
+    try:
+        with open(args.batch) as f:
+            items = [ln.strip() for ln in f
+                     if ln.strip() and not ln.strip().startswith("#")]
+    except OSError as e:
+        log(f"ERROR: can't read manifest {args.batch}: {e}")
+        sys.exit(2)
+    if not items:
+        log("ERROR: manifest is empty.")
+        sys.exit(2)
+    any_img = any(p.lower().endswith(IMG_EXTS) for p in items)
+    model = args.model or ("gemma4:26b" if any_img else "qwen3-coder:30b")
+    out_dir = args.out_dir or (os.path.splitext(args.batch)[0] + "_out")
+    os.makedirs(out_dir, exist_ok=True)
+    ok, failed, consec_exit = 0, [], 0
+    for i, path in enumerate(items, 1):
+        base = os.path.basename(path)
+        log(f"[{i}/{len(items)}] {base} ...")
+        try:
+            if not os.path.exists(path):
+                raise RuntimeError("file not found")
+            images, item_prompt = None, prompt
+            if path.lower().endswith(IMG_EXTS):
+                if os.path.getsize(path) > 20_000_000:
+                    raise RuntimeError("image too large (>20MB)")
+                with open(path, "rb") as fh:
+                    images = [base64.b64encode(fh.read()).decode()]
+            else:
+                with open(path, "r", errors="replace") as fh:
+                    item_prompt = f"{prompt}\n\n--- {base} ---\n{fh.read(24_000)}"
+            text = call_ollama(item_prompt, args.system, args.temperature, model,
+                               args.max_tokens, images)
+            with open(os.path.join(out_dir, base + ".out.txt"), "w") as fh:
+                fh.write(text)
+            ok += 1
+            consec_exit = 0
+        except SystemExit:
+            # call_ollama exits on server/model errors; count as an item failure, but
+            # three in a row means the backend is down — stop wasting the queue.
+            failed.append(base)
+            consec_exit += 1
+            if consec_exit >= 3:
+                log("ABORT: 3 consecutive backend failures — is `ollama serve` up?")
+                break
+        except Exception as exc:  # noqa: BLE001 — item isolation is the contract
+            failed.append(base)
+            consec_exit = 0
+            log(f"  FAILED: {exc}")
+    summary = {"batch": len(items), "ok": ok, "failed": failed[:20],
+               "failed_count": len(failed), "out_dir": out_dir, "model": model,
+               "seconds": round(time.time() - t0, 1)}
+    print(json.dumps(summary))
+    _ledger({"script": "gemini", "backend": "ollama", "model": model,
+             "batch": len(items), "ok": ok, "failed_count": len(failed),
+             "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
+             "seconds": summary["seconds"],
+             "status": "ok" if not failed else "partial"})
+
+
 def main():
     # Force UTF-8 on stdout/stderr so Gemini's Unicode output (em-dashes, accents, etc.)
     # prints cleanly on Windows consoles, which often default to cp1252.
@@ -531,10 +625,17 @@ def main():
     ap.add_argument("--thinking-budget", type=int, default=None, dest="thinking_budget",
                     help="Token budget for model 'thinking' (0 = off, faster/cheaper on Flash).")
     ap.add_argument("--list-models", action="store_true", help="List models this key can use, then exit.")
+    ap.add_argument("--batch", metavar="MANIFEST",
+                    help="Batch mode (ollama backend only): file listing one input path per "
+                         "line; runs the prompt over every item, writes <name>.out.txt each "
+                         "to --out-dir, prints ONE JSON summary. Zero Claude tokens per item.")
+    ap.add_argument("--out-dir", default=None, dest="out_dir",
+                    help="--batch output directory (default: <manifest>_out).")
     ap.add_argument("--preflight", action="store_true",
                     help="Treat the output as Python code: syntax-check it (no execution) and, on a "
                          "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
     args = ap.parse_args()
+    t0 = time.time()
 
     if args.list_models:
         key = api_key()
@@ -549,25 +650,54 @@ def main():
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)
 
+    if args.batch:
+        run_batch(args, prompt)
+        return
+
     # Text-only backends: on-device Apple FM, a local Ollama model, or the OAuth'd Gemini CLI.
     # File ingest and web grounding stay on the `gemini` (API) backend, where they're free.
     if args.backend in ("fm", "ollama", "gemini-cli"):
+        images = []
         if args.file:
-            log(f"ERROR: --file is only on the gemini (API) backend (PDFs/images need it). "
-                f"Use --backend gemini, or paste text into the prompt for {args.backend}.")
-            sys.exit(2)
+            # Local vision: IMAGE files ride the ollama backend (gemma4:26b has native
+            # vision) — free/unlimited/private. Non-image files still need the API.
+            IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+            bad = [f for f in args.file if not f.lower().endswith(IMG_EXTS)]
+            if args.backend != "ollama" or bad:
+                log(f"ERROR: --file on local backends: only IMAGE files "
+                    f"(png/jpg/jpeg/gif/webp) and only on --backend ollama (local vision "
+                    f"via gemma4:26b). PDFs/docs/other need --backend gemini.")
+                sys.exit(2)
+            for fp in args.file:
+                if not os.path.exists(fp):
+                    log(f"ERROR: file not found: {fp}")
+                    sys.exit(2)
+                if os.path.getsize(fp) > 20_000_000:
+                    log(f"ERROR: image too large (>20MB): {fp}")
+                    sys.exit(2)
+                with open(fp, "rb") as fh:
+                    images.append(base64.b64encode(fh.read()).decode())
         if args.search:
             log("ERROR: --search (web grounding) is only on the gemini (API) backend.")
             sys.exit(2)
         if args.backend == "fm":
+            model_eff = "fm"
             text = call_fm(prompt, args.system, args.temperature)
         elif args.backend == "ollama":
-            text = call_ollama(prompt, args.system, args.temperature, args.model, args.max_tokens)
+            # vision needs a vision model: auto-pick gemma4 when images are present
+            model_eff = args.model or ("gemma4:26b" if images else "qwen3-coder:30b")
+            text = call_ollama(prompt, args.system, args.temperature, model_eff,
+                               args.max_tokens, images)
         else:
+            model_eff = args.model or "default"
             text = call_gemini_cli(prompt, args.system, args.temperature, args.model,
                                    preflight=args.preflight)
         print(text)
         sys.stdout.flush()
+        _ledger({"script": "gemini", "backend": args.backend, "model": model_eff,
+                 "prompt_chars": len(prompt), "out_chars": len(text),
+                 "images": len(images) or None,
+                 "seconds": round(time.time() - t0, 1), "status": "ok"})
         return
 
     # --- gemini backend (default) ---
@@ -628,6 +758,12 @@ def main():
     log(f"model: {model}")
     log(f"tokens: prompt={u.get('promptTokenCount')} output={u.get('candidatesTokenCount')} "
         f"thoughts={u.get('thoughtsTokenCount', 0)} total={u.get('totalTokenCount')}")
+    _ledger({"script": "gemini", "backend": "gemini", "model": model,
+             "prompt_chars": len(prompt), "out_chars": len(text),
+             "tokens_prompt": u.get("promptTokenCount"),
+             "tokens_out": u.get("candidatesTokenCount"),
+             "search": bool(args.search), "files": len(args.file),
+             "seconds": round(time.time() - t0, 1), "status": "ok"})
     fr = cand.get("finishReason")
     if fr and fr != "STOP":
         log(f"finishReason: {fr}  (output may be truncated/partial)")
