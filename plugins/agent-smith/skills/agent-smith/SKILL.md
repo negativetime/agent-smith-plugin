@@ -232,17 +232,16 @@ python3 "$SKILL/scripts/gemini.py" --backend ollama "Draft a Python function tha
 ```
 
 - `openai` is the **generic socket**: any provider or server speaking the OpenAI
-  `/chat/completions` dialect. Set `--base-url` (or `OPENAI_BASE_URL`) + `--model`; auth is
-  `OPENAI_API_KEY` env if the endpoint needs one (local servers don't). Built-in 429/5xx retry
-  (free tiers rate-limit). Examples: Groq `https://api.groq.com/openai/v1` with
-  `--model openai/gpt-oss-120b` (free-tier frontier-adjacent); OpenRouter
-  `https://openrouter.ai/api/v1` with a `:free` model; local `http://localhost:11434/v1`.
+  `/chat/completions` dialect. `--base-url` shorthands: **`groq` | `openrouter` | `openai` |
+  `ollama`** (or any full `.../v1` URL / `OPENAI_BASE_URL`). Auth: `OPENAI_API_KEY` env
+  (Groq prefers `GROQ_API_KEY`); local servers need none. Built-in 429/5xx retry (free tiers
+  rate-limit), and a proper User-Agent (Cloudflare-fronted APIs 403 bare urllib). Groq with
+  `--model openai/gpt-oss-120b` = free-tier frontier-adjacent at extreme speed.
   **Caveat: free cloud tiers commonly train on your data — keep private work on `ollama`/`fm`.**
 
 ```bash
-python3 "$SKILL/scripts/gemini.py" --backend openai \
-  --base-url https://api.groq.com/openai/v1 --model openai/gpt-oss-120b \
-  "Draft a data-model for ..."
+python3 "$SKILL/scripts/gemini.py" --backend openai --base-url groq \
+  --model openai/gpt-oss-120b "Draft a data-model for ..."
 ```
 
 **No Gemini account? You don't need one.** If `GEMINI_API_KEY` isn't set, don't dead-end — run fully

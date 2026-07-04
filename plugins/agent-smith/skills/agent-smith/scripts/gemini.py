@@ -520,10 +520,15 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
     """Any OpenAI-compatible /chat/completions endpoint: Groq, Cerebras, OpenRouter,
     GitHub Models, xAI — or local servers (ollama's /v1, mlx_lm server, LM Studio).
     Auth = Bearer OPENAI_API_KEY if set (local servers usually need none)."""
-    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
+    BASE_ALIASES = {"groq": "https://api.groq.com/openai/v1",
+                    "openrouter": "https://openrouter.ai/api/v1",
+                    "openai": "https://api.openai.com/v1",
+                    "ollama": "http://localhost:11434/v1"}
+    base = base_url or os.environ.get("OPENAI_BASE_URL") or ""
+    base = BASE_ALIASES.get(base, base).rstrip("/")
     if not base:
         log("ERROR: --backend openai needs --base-url or OPENAI_BASE_URL "
-            "(e.g. https://api.groq.com/openai/v1 or http://localhost:11434/v1).")
+            "(shorthands: groq | openrouter | ollama — or a full .../v1 URL).")
         sys.exit(2)
     if not model:
         log("ERROR: --backend openai needs --model (endpoint-specific, e.g. "
@@ -536,8 +541,11 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
         body["temperature"] = temperature
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
-    headers = {"Content-Type": "application/json"}
+    # Cloudflare-fronted APIs (e.g. Groq) 403 urllib's default UA — send a real one.
+    headers = {"Content-Type": "application/json", "User-Agent": "agent-smith/1.4"}
     key = os.environ.get("OPENAI_API_KEY")
+    if "groq.com" in base:
+        key = os.environ.get("GROQ_API_KEY") or key
     if key:
         headers["Authorization"] = f"Bearer {key}"
     resp = None
