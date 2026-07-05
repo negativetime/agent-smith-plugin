@@ -158,9 +158,12 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
 - **Feed failures back:** every `bad` = a ready-made regression test — build one before
   that shape is delegated again.
-- **Witness drift sensor:** `SMITH_WITNESS_RATE` (default 5%) of local runs silently re-run
-  on `SMITH_WITNESS_MODEL` (default gpt-oss:20b) and compared; disagreement = DRIFT SIGNAL
-  in the report (never an auto-verdict). Verification never reaches zero.
+- **Witness drift sensor (trust has a forgetting curve):** local runs are silently re-run
+  on `SMITH_WITNESS_MODEL` (default gpt-oss:20b) on an FSRS-style schedule — the interval
+  grows with each consecutive agreement (every 4 runs -> 8 -> 16 ... cap 256) and COLLAPSES
+  back to 4 on any disagreement or verified-bad verdict. Verification never reaches zero;
+  stable routes just earn longer intervals. Disagreement = DRIFT SIGNAL in the report
+  (never an auto-verdict). `SMITH_WITNESS_RATE` switches back to flat-rate sampling.
 
 ## Troubleshooting
 

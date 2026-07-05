@@ -584,17 +584,65 @@ def _normalize_output(text):
     return re.sub(r"\s+", " ", (text or "").strip().casefold())
 
 
-def _witness(prompt, system, primary_model, primary_text, images, context):
-    """Drift sensor (witness verification): silently re-run a SAMPLED local call on a
-    second model and compare. Trust is continuously re-earned — verification never
-    reaches zero, even for trusted-tier shapes. Local-only (free), fail-safe, and a
-    disagreement is a SIGNAL for review logged to the ledger, never an auto-verdict
-    (the witness may be the wrong one). Tune with SMITH_WITNESS_RATE (default 0.05,
-    0 disables) and SMITH_WITNESS_MODEL (default gpt-oss:20b)."""
-    try:
+def _witness_due(primary_model):
+    """FSRS-style witness scheduling: trust has a forgetting curve. The re-verification
+    interval for a model GROWS with its streak of consecutive witness agreements
+    (interval = BASE * 2^streak runs, capped) and COLLAPSES back to BASE on any witness
+    disagreement or verified-bad verdict. Verification never reaches zero; stable routes
+    just earn longer intervals. Env: SMITH_WITNESS_BASE (default 4), SMITH_WITNESS_CAP
+    (default 256). Setting SMITH_WITNESS_RATE switches back to legacy flat-rate sampling."""
+    rate_env = os.environ.get("SMITH_WITNESS_RATE")
+    if rate_env is not None:  # legacy/explicit flat-rate mode
         import random
-        rate = float(os.environ.get("SMITH_WITNESS_RATE", "0.05"))
-        if images or rate <= 0 or random.random() >= rate:
+        r = float(rate_env)
+        return r > 0 and random.random() < r
+    base = max(1, int(os.environ.get("SMITH_WITNESS_BASE", "4")))
+    cap = int(os.environ.get("SMITH_WITNESS_CAP", "256"))
+    path = os.environ.get("SMITH_LEDGER") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "usage.jsonl")
+    if not os.path.isfile(path):
+        return True  # no history: witness the first run
+    from collections import deque
+    rows = []
+    with open(path) as f:
+        for line in deque(f, maxlen=2000):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict):
+                rows.append(r)
+    streak, runs_since, seen_witness = 0, 0, False
+    for r in reversed(rows):
+        s = r.get("script")
+        if s == "witness" and r.get("primary_model") == primary_model:
+            seen_witness = True
+            if r.get("agree"):
+                streak += 1
+            else:
+                break  # disagreement: curve resets here
+        elif (s == "verdict" and r.get("ref_model") == primary_model
+              and r.get("verdict") == "bad"):
+            break  # verified-bad: curve resets here
+        elif s not in ("witness", "verdict") and r.get("model") == primary_model:
+            if not seen_witness:
+                runs_since += 1
+    if not seen_witness:
+        return True  # model never witnessed
+    # NOTE: the current run's ledger row is appended BEFORE this check, so
+    # runs_since already counts it — compare directly, no +1.
+    return runs_since >= min(base * (2 ** streak), cap)
+
+
+def _witness(prompt, system, primary_model, primary_text, images, context):
+    """Drift sensor (witness verification): silently re-run a DUE local call on a
+    second model and compare. Trust is continuously re-earned — see _witness_due for
+    the forgetting-curve schedule. Local-only (free), fail-safe, and a disagreement
+    is a SIGNAL for review logged to the ledger, never an auto-verdict (the witness
+    may be the wrong one). SMITH_WITNESS_MODEL sets the witness (default gpt-oss:20b)."""
+    try:
+        if images or not _witness_due(primary_model):
             return
         norm = " ".join((primary_text or "").split())
         if not norm or len(norm) > 280:

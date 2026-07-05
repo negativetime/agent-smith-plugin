@@ -105,6 +105,16 @@ def main():
         agree = sum(1 for w in witnesses if w.get("agree"))
         print(f"witness drift sensor: {len(witnesses)} sampled, "
               f"{agree}/{len(witnesses)} agreed ({agree/len(witnesses):.0%})")
+        streaks = {}  # per primary model: consecutive agrees from most recent back
+        for w in witnesses:
+            m = w.get("primary_model")
+            if w.get("agree"):
+                streaks[m] = streaks.get(m, 0) + 1
+            else:
+                streaks[m] = 0
+        for m, s in sorted(streaks.items()):
+            interval = min(4 * (2 ** s), 256)
+            print(f"  schedule: {m}  streak {s} -> witness every ~{interval} runs")
         drifts = [w for w in witnesses if not w.get("agree")]
         for w in drifts[-5:]:
             print(f"  DRIFT {w.get('ts','?')[:19]}  {w.get('primary_model')} vs "
