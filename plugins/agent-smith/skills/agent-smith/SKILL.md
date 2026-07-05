@@ -100,7 +100,10 @@ including the exact helper commands — read [references/playbooks.md](reference
    with (in which case, see the break-even note below — you probably shouldn't have offloaded).
 4. **Finish.** Integrate into files yourself, do the correctness-critical parts, polish. If
    the draft is close but off, send Gemini a focused revision prompt rather than redoing it.
-5. **Report.** Tell the user what you delegated and that you verified it.
+5. **Report — and record the verdict.** Tell the user what you delegated and that you
+   verified it, then mark it in the ledger:
+   `python3 "$SKILL/scripts/verdict.py" good` (or `bad "what was wrong"`). One line, right
+   after review — it's what turns the ledger into a quality record instead of a throughput log.
 
 ## Using the helper
 
@@ -308,8 +311,13 @@ outcome; `SMITH_LEDGER` env overrides the path). Logging is fail-safe — it can
 break a run — and `gemini.py` currently records successful completions only, while
 `smith_agent.py` records every outcome including failures. To review delegation
 progress: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
-**Feed failures back:** a delegated task shape that failed in the real world deserves a
-regression test before you delegate that shape again.
+**Verdicts close the loop:** `ok` means COMPLETED, not CORRECT — after reviewing a
+delegated output, record what the review found:
+`python3 "$SKILL/scripts/verdict.py" good` (marks the most recent run; `--model`/`--script`
+to target others) or `verdict.py bad "what was wrong"`. The report then shows a true
+quality rate per model and lists every verified-bad with its note.
+**Feed failures back:** every `bad` verdict is a ready-made regression test — the task
+shape that failed deserves one before you delegate that shape again.
 
 ## Token economy
 
