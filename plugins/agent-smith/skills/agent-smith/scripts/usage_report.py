@@ -29,7 +29,7 @@ def main():
     if not os.path.isfile(LEDGER):
         print(f"No ledger yet at {LEDGER} — run a delegation first.")
         return
-    rows, verdicts = [], {}
+    rows, verdicts, witnesses = [], {}, []
     with open(LEDGER) as f:
         for line in f:
             try:
@@ -41,6 +41,8 @@ def main():
             if r.get("script") == "verdict":
                 key = (r.get("ref_ts"), r.get("ref_script"), r.get("ref_model"))
                 verdicts[key] = r  # last verdict for a run wins
+            elif r.get("script") == "witness":
+                witnesses.append(r)
             else:
                 rows.append(r)
     all_rows = rows  # routing weights are cumulative — never filtered by --today
@@ -99,6 +101,15 @@ def main():
                     else "light review" if streak >= 5 else "full review")
             print(f"  {tag} @ {model}: {goods} good, {bads} bad, "
                   f"{goods/len(judged):.0%} quality, streak {streak} -> {tier}")
+    if witnesses:
+        agree = sum(1 for w in witnesses if w.get("agree"))
+        print(f"witness drift sensor: {len(witnesses)} sampled, "
+              f"{agree}/{len(witnesses)} agreed ({agree/len(witnesses):.0%})")
+        drifts = [w for w in witnesses if not w.get("agree")]
+        for w in drifts[-5:]:
+            print(f"  DRIFT {w.get('ts','?')[:19]}  {w.get('primary_model')} vs "
+                  f"{w.get('witness_model')} ({w.get('context')}): "
+                  f"'{w.get('primary_out','')[:40]}' vs '{w.get('witness_out','')[:40]}'")
     if bad:
         print("\nverified-BAD (regression-test feed):")
         for r in bad[-10:]:

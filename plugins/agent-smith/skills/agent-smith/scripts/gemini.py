@@ -584,6 +584,37 @@ def _normalize_output(text):
     return re.sub(r"\s+", " ", (text or "").strip().casefold())
 
 
+def _witness(prompt, system, primary_model, primary_text, images, context):
+    """Drift sensor (witness verification): silently re-run a SAMPLED local call on a
+    second model and compare. Trust is continuously re-earned — verification never
+    reaches zero, even for trusted-tier shapes. Local-only (free), fail-safe, and a
+    disagreement is a SIGNAL for review logged to the ledger, never an auto-verdict
+    (the witness may be the wrong one). Tune with SMITH_WITNESS_RATE (default 0.05,
+    0 disables) and SMITH_WITNESS_MODEL (default gpt-oss:20b)."""
+    try:
+        import random
+        rate = float(os.environ.get("SMITH_WITNESS_RATE", "0.05"))
+        if images or rate <= 0 or random.random() >= rate:
+            return
+        norm = " ".join((primary_text or "").split())
+        if not norm or len(norm) > 280:
+            return  # only short structured outputs compare meaningfully
+        wmodel = os.environ.get("SMITH_WITNESS_MODEL", "gpt-oss:20b")
+        if wmodel == primary_model:
+            wmodel = "gemma4:26b" if primary_model != "gemma4:26b" else "gpt-oss:20b"
+        wtext = call_ollama(prompt, system, 0.0, wmodel, None)
+        agree = _outputs_agree(primary_text, wtext)
+        _ledger({"script": "witness", "primary_model": primary_model,
+                 "witness_model": wmodel, "agree": agree, "context": context,
+                 "primary_out": norm[:120],
+                 "witness_out": " ".join((wtext or "").split())[:120]})
+        if not agree:
+            log(f"[witness] DRIFT SIGNAL: {wmodel} disagrees with {primary_model} "
+                f"({context}) — review recommended; see ledger.")
+    except (Exception, SystemExit):  # witness must never harm the primary run
+        pass
+
+
 def _outputs_agree(a, b):
     """True when two model outputs agree after normalization. Exact-match voting —
     only meaningful for SHORT structured outputs (classify/extract), not prose."""
@@ -696,6 +727,7 @@ def run_batch(args, prompt):
             else:
                 with open(out_path, "w") as fh:
                     fh.write(text)
+                _witness(item_prompt, args.system, model, text, images, f"batch:{base}")
             ok += 1  # consensus mode: ok = agreed + escalated (both calls succeeded)
             consec_exit = 0
         except SystemExit:
@@ -860,6 +892,8 @@ def main():
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "images": len(images) or None,
                  "seconds": round(time.time() - t0, 1), "status": "ok"})
+        if args.backend == "ollama":
+            _witness(prompt, args.system, model_eff, text, images, "oneshot")
         return
 
     # --- gemini backend (default) ---

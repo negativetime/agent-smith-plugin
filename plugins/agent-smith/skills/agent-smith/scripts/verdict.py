@@ -27,7 +27,7 @@ def main():
     ap.add_argument("verdict", choices=["good", "bad"])
     ap.add_argument("note", nargs="?", default="", help="why (required for bad)")
     ap.add_argument("--model", help="target the most recent run of this model")
-    ap.add_argument("--script", choices=["gemini", "smith_agent"],
+    ap.add_argument("--script", choices=["gemini", "smith_agent", "transcribe"],
                     help="target the most recent run of this script")
     ap.add_argument("--ts", help="target the run with this exact ts")
     ap.add_argument("--tag", help="task-shape label for routing weights "
@@ -51,7 +51,7 @@ def main():
                 continue
             if not isinstance(r, dict):
                 continue
-            if r.get("script") == "verdict":
+            if r.get("script") in ("verdict", "witness"):
                 continue
             runs.append(r)
 

@@ -331,6 +331,13 @@ Routes strengthen with good verdicts and reset on a bad — earned trust that up
 The report also shows the overall quality rate and lists every verified-bad with its note.
 **Feed failures back:** every `bad` verdict is a ready-made regression test — the task
 shape that failed deserves one before you delegate that shape again.
+**Witness drift sensor (verification never reaches zero):** a sampled fraction of LOCAL
+runs (`SMITH_WITNESS_RATE`, default 5%) is silently re-run on a second model
+(`SMITH_WITNESS_MODEL`, default gpt-oss:20b) and compared. Agreement is logged;
+disagreement raises a DRIFT SIGNAL in the report for review — never an auto-verdict (the
+witness may be the wrong one). Free (local-only), skips images and prose-length outputs.
+This is how trusted routing stays *continuously re-earned* — silent model regressions get
+caught by sampling, not by faith.
 
 ## Token economy
 
