@@ -28,330 +28,143 @@ description: >-
 
 ## The deal
 
-You (Claude) are the orchestrator and the quality bar. Gemini is a fast, large-context
-workhorse you can shell out to for generation that would otherwise burn Claude tokens.
-The pattern is simple: **delegate the bulk, keep the judgment.** Gemini drafts and digests;
-you scope, review, verify, and finish.
+You (Claude) are the orchestrator and the quality bar. **Delegate the bulk, keep the
+judgment.** Backend output is an intermediate, never a deliverable — pull every result
+through your own review before it counts. This spends the fleet's tokens instead of
+Claude's, per the user's standing quota-economy preference.
 
-Gemini's output is an **intermediate, never a deliverable.** Don't paste it to the user raw.
-Pull every result back through your own review before it counts as done. This skill exists to
-spend Gemini's tokens instead of Claude's — which directly serves the user's standing
-preference to be economical with Claude quota.
+## What to offload vs. keep
 
-## What to offload vs. what to keep
+**Offload** (voluminous and checkable): research/fact-finding (`--search`), digesting big
+inputs (`--file` — let the backend read the 200 pages, not you), first-draft generation
+(code, configs, tests, copy from a clear spec).
+**Keep** (subtle, stateful, expensive to get wrong): orchestration, repo-aware edits,
+correctness-critical reasoning, security, final review + integration.
+**Break-even:** don't offload small work — overhead exceeds savings below ~50 KB input /
+a page or two of output (measured; see [references/measured-results.md](references/measured-results.md)).
 
-**Send to Gemini** (voluminous and checkable):
-- **Research / fact-finding** — it has live Google Search grounding (`--search`), so it's
-  good for fresh facts, gathering sources, "what is the current state of X".
-- **Digesting large inputs** — summarize, extract, classify, or transform big PDFs,
-  transcripts, logs, CSVs, datasets. Let Gemini ingest the raw file (`--file`) and hand
-  back a digest, instead of reading 200 pages into *your* context.
-- **First-draft generation** — boilerplate code, config files, test scaffolds, regex, a
-  rough function from a clear spec.
+## Task playbooks
 
-**Keep on Claude** (subtle, stateful, or expensive to get wrong):
-- Orchestration and deciding what to offload.
-- Repo-aware edits and anything needing the local filesystem, tools, or build.
-- Correctness-critical reasoning, security, tricky debugging.
-- Final review, integration, and verification of Gemini's output.
+**Offload the words, keep the action** — anything that deploys, commits, posts, or charges
+stays with you (backends have no credentials).
 
-**Rule of thumb:** if the work is *voluminous and checkable*, send it to Gemini. If it's
-*subtle, stateful, or expensive to get wrong*, keep it.
-
-**Break-even — don't offload trivially small work.** This skill has fixed overhead: you read
-this file, run the helper, and pull Gemini's output back into your context to review it. For a
-quick task — a short factual answer, a tiny file, a few-line snippet — that overhead costs
-*more* than just doing it yourself, in both tokens and wall-clock. The win only materializes
-when the offloaded payload is genuinely big. Rough line: offload when the input is more than
-~50 KB / a few thousand words, or the generation is more than a page or two; below that, just
-do it directly. (Benchmarked: on small tasks the skill spent *more* Claude tokens than the
-baseline — the overhead dominated.)
-
-## Task playbooks — recurring workflows
-
-Several common, token-heavy workflows decompose the same way: **Gemini drafts the words; Claude
-(or a script with your credentials) does the action.** Offload the *generation/research* half;
-keep the *execution* half, because Gemini can't touch your accounts, tools, or repo.
-
-| Workflow | Offload to Gemini (the bulk) | Keep on Claude / a script |
+| Workflow | Offload | Keep |
 |---|---|---|
-| **Planning** | Research, first-draft plans, option write-ups | The decision, repo-aware specifics, the committed plan |
-| **Website content** | Copy, blog/FAQ, headlines, first-draft HTML/CSS, meta/alt text | Wiring into the repo/build, voice/legal pass, in-browser test |
-| **Cloudflare / infra** | Draft `wrangler.toml`, Worker scaffolds, Dockerfiles, CI YAML *as text* | The deploy/config itself — **Claude's MCP + your creds, never Gemini** |
-| **Business postings** | One announcement → many platform-specific posts, captions, hashtags | The actual posting — a script with **your** tokens; final approval |
+| Planning | research, draft plans, option write-ups | the decision, repo specifics |
+| Website content | copy, blog/FAQ, first-draft HTML/CSS | wiring, voice/legal pass, browser test |
+| Cloudflare/infra | wrangler.toml, Dockerfiles, CI YAML *as text* | the deploy — your MCP + creds |
+| Business postings | announcement → per-platform posts | actual posting; final approval |
 
-The rule for every row: **offload the words, keep the action.** Anything that deploys, commits,
-posts, charges, or runs against a live service stays with you. For the full recipe of each —
-including the exact helper commands — read [references/playbooks.md](references/playbooks.md).
+Full recipes: [references/playbooks.md](references/playbooks.md).
 
 ## The loop
 
-1. **Scope.** Write a tight, self-contained prompt. Gemini has **none** of this
-   conversation's context — spell out the goal, the format you want, and any constraints.
-2. **Delegate.** Call the helper (below). Pick the model by difficulty (see Model choice).
-3. **Review critically — but in proportion to the payload.** Gemini hallucinates, may invent
-   APIs or citations, lacks your repo context, and tends to be verbose. Verify factual claims
-   (spot-check or re-ground), run or lint any code, and strip the fluff. Treat it as a
-   smart-but-unsupervised draft. **Crucially: do not re-ingest a large input just to check the
-   output.** If you offload a 200-page PDF and then read all 200 pages yourself to verify, you
-   paid for it twice and erased the entire saving. For big payloads, verify by *sampling* —
-   confirm the format, check a few known anchors, spot-check a couple of sections — and trust
-   the rest. Full re-reading to verify is only acceptable when the input was small to begin
-   with (in which case, see the break-even note below — you probably shouldn't have offloaded).
-4. **Finish.** Integrate into files yourself, do the correctness-critical parts, polish. If
-   the draft is close but off, send Gemini a focused revision prompt rather than redoing it.
-5. **Report — and record the verdict.** Tell the user what you delegated and that you
-   verified it, then mark it in the ledger:
-   `python3 "$SKILL/scripts/verdict.py" good` (or `bad "what was wrong"`). One line, right
-   after review — it's what turns the ledger into a quality record instead of a throughput log.
+1. **Scope** — tight, self-contained prompt; the backend has none of this conversation.
+2. **Delegate** — pick backend + model below.
+3. **Review in proportion to payload** — backends hallucinate APIs/citations; run/lint code.
+   **Never re-ingest a large input to verify** — sample: check format, a few known anchors,
+   spot-check sections. (Full re-read = you paid twice.)
+4. **Finish** — integrate yourself; send focused revision prompts rather than redoing.
+5. **Report + record the verdict** — tell the user what you delegated and verified, then:
+   `python3 "$SKILL/scripts/verdict.py" good` (or `bad "why"`). One line, every review.
 
 ## Using the helper
 
-Path: `scripts/gemini.py` under this skill dir. The **answer prints to stdout**; **model + token
-usage + grounding sources print to stderr** — read both.
-
-The script is pure-stdlib Python and runs identically on **macOS, Linux, and Windows** — it just
-makes HTTPS calls to the Gemini API. Only the launcher and paths differ by OS; adapt to whatever
-the current platform uses:
-
-- **Python launcher:** `python3` on macOS/Linux; `python` (or `py -3`) on Windows.
-- **Locating the script:** when this is installed as a **plugin**, Claude Code sets
-  `$CLAUDE_PLUGIN_ROOT` to the plugin root, so the helper is at
-  `$CLAUDE_PLUGIN_ROOT/skills/agent-smith/scripts/gemini.py`. As a **personal skill** it's under
-  `~/.claude/skills/agent-smith` (macOS/Linux) or `%USERPROFILE%\.claude\skills\agent-smith`
-  (Windows). The snippets below resolve either case automatically.
-- **API key:** the script reads `GEMINI_API_KEY` (fallback `GOOGLE_API_KEY`) from the environment.
-  If it isn't set on this machine, set it first — `export GEMINI_API_KEY=...` (macOS/Linux) or
-  `setx GEMINI_API_KEY "..."` (Windows; open a new shell afterward).
-
-**macOS / Linux (bash):**
+`scripts/gemini.py` — answer on stdout; model/tokens/sources on stderr (read both).
+Pure stdlib, runs on macOS/Linux/Windows (`python3` vs `python`). As a PLUGIN the
+helper lives under `$CLAUDE_PLUGIN_ROOT/skills/agent-smith`; as a personal skill under
+`~/.claude/skills/agent-smith` — the snippet below resolves both.
+Key: `GEMINI_API_KEY` (fallback `GOOGLE_API_KEY`) in the environment.
 
 ```bash
-# Resolves whether installed as a plugin ($CLAUDE_PLUGIN_ROOT set) or as a personal skill:
 SKILL="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/skills/agent-smith}"
 SKILL="${SKILL:-$HOME/.claude/skills/agent-smith}"
+python3 "$SKILL/scripts/gemini.py" "Explain X in 5 bullets"                       # flash default
+cat spec.txt | python3 "$SKILL/scripts/gemini.py" --model pro "Make a checklist"  # stdin
+python3 "$SKILL/scripts/gemini.py" --search "What's new in Swift?"                # grounded research
+python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize as bullets"       # file ingest
+python3 "$SKILL/scripts/gemini.py" --file inv.pdf --schema s.json "Extract items" # JSON extraction
 
-# Plain generation (default model = flash)
-python3 "$SKILL/scripts/gemini.py" "Explain X in 5 bullets"
+# BATCH (local, zero Claude tokens per item): manifest = one path per line;
+# images ride vision, text appends to prompt; per-item .out.txt + ONE JSON summary.
+python3 "$SKILL/scripts/gemini.py" --backend ollama --batch files.txt --out-dir out "Classify: ..."
 
-# Long prompt via stdin
-cat big_spec.txt | python3 "$SKILL/scripts/gemini.py" --model pro "Turn this into a checklist"
-
-# Web-grounded research (returns source URLs on stderr)
-python3 "$SKILL/scripts/gemini.py" --search "What's new in the latest Swift release?"
-
-# Digest a large file (PDF/CSV/txt/image) — Gemini ingests it, not you
-python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize the findings as bullets"
-
-# Structured extraction (force JSON, optionally against a schema)
-python3 "$SKILL/scripts/gemini.py" --file invoices.pdf --schema schema.json "Extract line items"
-
-# Code draft with a role
-python3 "$SKILL/scripts/gemini.py" --model pro --system "Senior Python engineer" \
-  "Write a function that parses ISO-8601 durations into seconds"
-
-# BATCH: one operation over many files, LOCAL + zero Claude tokens per item.
-# Manifest = one path per line; images ride vision (auto gemma4), text files append
-# to the prompt; per-item results -> --out-dir/<name>.out.txt; ONE JSON summary back.
-python3 "$SKILL/scripts/gemini.py" --backend ollama --batch shots_manifest.txt \
-  --out-dir triage "One line: what does this show, and is anything visibly broken?"
-
-# CONSENSUS batch ("disagreement fires escalation"): every item runs on TWO local
-# models at temp 0. Agreement (normalized) -> accepted as usual; disagreement -> both
-# answers saved as <name>.A.txt/.B.txt + the item queued in <out-dir>/_escalate.txt
-# for a stronger model or human review. Spends review attention EXACTLY on the items
-# most likely to be wrong. For SHORT structured outputs (classify/extract).
+# CONSENSUS batch (disagreement fires escalation): each item on TWO local models at
+# temp 0; agree -> accept; disagree -> .A/.B files + _escalate.txt queue. SHORT outputs only.
 python3 "$SKILL/scripts/gemini.py" --backend ollama --model llama3.2:3b \
-  --batch records.txt --consensus qwen2.5-coder:14b --out-dir cls \
-  "Answer with exactly one word: ..."
+  --batch records.txt --consensus qwen2.5-coder:14b --out-dir cls "One word: ..."
 ```
 
-**Windows (PowerShell)** — same flags, just the `python` launcher and the Windows path; pipe stdin
-with `Get-Content`:
+Windows: same flags, `python` launcher, `Get-Content` for stdin.
+**Flags:** `--model` · `--system` · `--file` (repeatable) · `--search` · `--json`/`--schema` ·
+`--temperature` · `--max-tokens` · `--thinking-budget N` · `--preflight` (gemini-cli syntax
+check) · `--list-models`. API internals: [references/gemini-api.md](references/gemini-api.md).
 
-```powershell
-$SKILL = if ($env:CLAUDE_PLUGIN_ROOT) { "$env:CLAUDE_PLUGIN_ROOT\skills\agent-smith" } else { "$env:USERPROFILE\.claude\skills\agent-smith" }
+## Backends (`--backend`) — default `gemini`, reach for edges
 
-python "$SKILL\scripts\gemini.py" "Explain X in 5 bullets"
-Get-Content big_spec.txt | python "$SKILL\scripts\gemini.py" --model pro "Turn this into a checklist"
-python "$SKILL\scripts\gemini.py" --search "What's new in the latest Swift release?"
-python "$SKILL\scripts\gemini.py" --file report.pdf "Summarize the findings as bullets"
-```
+| backend | runs on | cost | files/web | use when |
+|---|---|---|---|---|
+| `gemini` | Google cloud (API key) | free tier, rate-limited | **yes** | anything substantial; ONLY one with `--file`/`--search` |
+| `gemini-cli` | your OAuth login | subscription quota, no API limit | no | free-tier 429s throttling you (one-time: `gemini` → Login with Google) |
+| `fm` | this Mac (~3B) | free | no | private + simple bulk. NOT bundled — supply your own `fm_helper` (`FM_HELPER` path); errors if unset |
+| `ollama` | this Mac | free, unlimited | images yes | private/offline/high-volume; the FLEET below |
+| `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data — private work stays local** |
 
-**Flags (identical on every OS):** `--model` (flash|pro|flash-lite|full-name) · `--system` ·
-`--file PATH` (repeatable) · `--search` (Google grounding) · `--json` / `--schema PATH` ·
-`--temperature` · `--max-tokens` · `--thinking-budget N` (0 = off, faster/cheaper on Flash) ·
-`--preflight` (gemini-cli: syntax-check generated code and auto-retry once on a SyntaxError) ·
-`--list-models`. The `gemini-cli` backend also auto-applies a deny-all-tools policy
-(`scripts/deny_all_tools.toml`) so it can only return text — never edits files — and runs ~25% leaner.
+## Local fleet routing (gym-earned; evidence → [references/measured-results.md](references/measured-results.md))
 
-Deeper API details, the full model list, grounding/Files-API internals, and a curl fallback
-are in [references/gemini-api.md](references/gemini-api.md). Read it only if you hit something
-the flags above don't cover.
-
-## Backends — where the work actually runs (`--backend`)
-
-All four backends offload the heavy lifting *off Claude* (that's the whole point — spare Claude's
-tokens). They differ in cost, power, and privacy. **Default to `gemini`**; reach for the others
-when their specific edge matters.
-
-| `--backend` | Runs on | Cost | Power | Files / web? | Use when |
-|---|---|---|---|---|---|
-| `gemini` *(default)* | Google cloud (API key) | free tier, **rate-limited** | highest (frontier 3.x) | **yes** — `--file`, `--search`, JSON schema | anything substantial; the **only** one that ingests PDFs/images or does live web research |
-| `gemini-cli` | Google cloud (your OAuth login) | your subscription/account quota, **no API rate limit** | highest (same Gemini models) | no (text only) | same Gemini quality but **free-tier 429s are throttling you** — runs on the quota you already have via the CLI login |
-| `fm` | this Mac (Apple Intelligence) | free, **no quota** | small (~3B) | no (text only) | data must stay **private/offline**; quick simple bulk you don't want to spend Gemini quota on |
-| `ollama` | this Mac (local model) | free, **no quota** | mid (model-dependent) | images yes (vision, gemma4); no docs/web | offline/private with better quality than `fm`; **unlimited** high-volume bulk with no rate limits |
-| `openai` | ANY OpenAI-compatible endpoint (`--base-url`) | varies — **free tiers exist** (Groq, Cerebras, OpenRouter `:free`, GitHub Models) | endpoint-dependent (Groq hosts gpt-oss-120b free) | no (text only) | burst capacity beyond Gemini's free tier; frontier-adjacent open models at zero cost; also drives local servers (ollama `/v1`, mlx_lm) |
-
-- **Gemini stays the brain.** The API (`gemini`) is the most capable and the only one that ingests
-  files or researches the web. Use the others for *text-in → text-out* work you already hold —
-  summarize, rewrite, classify, draft boilerplate — especially when it's **private, offline, or so
-  high-volume that Gemini's free-tier rate limits would throttle you** (the local ones have no 429s).
-- `gemini-cli` drives the locally-installed **Gemini CLI on your OAuth/Google login**, so it runs on
-  your subscription/account quota instead of the metered API key — the way to keep using top Gemini
-  models when free-tier 429s bite. **One-time setup:** run `gemini` once and choose *"Login with
-  Google."* The skill hides `GEMINI_API_KEY` from the CLI so it uses that login; set
-  `GEMINI_CLI_USE_API_KEY=1` to use the key instead. Text-only (no `--file`/`--search`).
-- `fm` (Apple Foundation Models, macOS 26+ with Apple Intelligence) is **opt-in and not bundled** —
-  this repo ships no binary on purpose (don't run opaque executables from strangers). It needs an
-  `fm_helper` you supply; point the skill at it with `FM_HELPER=/path/to/fm_helper`. If unset, the
-  `fm` backend just errors and you stay on `gemini`/`ollama`. (README has notes on building one.)
-- `ollama` needs `ollama serve` running and a model pulled. **First-time local setup is disk-aware:**
-  run `bash "$SKILL/scripts/setup_local_model.sh"` — it reads your free disk and offers a model tier
-  sized to it (qwen3-coder:30b ~18 GB / qwen2.5-coder:14b ~9 GB / 7B ~5 GB), then pulls your pick.
-  Default model is `qwen3-coder:30b` (fast drafts: 30B MoE, 3B active, 2–8s one-shot). For
-  **quality-critical code, design, or structured extraction use `--model gemma4:26b`** — the
-  measured local champion in the author's eval harness (12/12 correctness incl. design; slower
-  one-shot, 20–90s, thinking overhead). Lighter: `--model qwen2.5-coder:14b` (9 GB) or
-  `--model llama3.2:3b` (fast text only). **If the user wants local and no coder model is
-  installed, offer the tiered choice — sized to their actual `df` free space — before pulling.**
-  **Local vision:** `--backend ollama --file shot.png "what's wrong with this layout?"` — image
-  files (png/jpg/gif/webp, repeatable) go to gemma4:26b (auto-picked when images are present;
-  it's the vision-capable model). Free, unlimited, private — right for screenshot triage / UI QA /
-  error-dialog reading, and for HIGH-VOLUME image sweeps where the gemini API's rate limits
-  would bite. PDFs/docs still need `--backend gemini`.
-  **Measured caveat (10-item spot eval):** window-sized screenshots, dialogs, charts, and
-  code renders showed EXACT text fidelity (incl. hex error codes and prices) — solid for bulk
-  triage. BUT on full-page TALL captures (e.g. 1200×5300 scrolling screenshots) small text
-  gets **confidently fabricated** (invented brand/nav/button names while big headings stayed
-  exact). Rule: **crop or tile scrolling captures to viewport-size before sending; never act
-  on small-text claims from a tall image without a crop.**
-
-```bash
-python3 "$SKILL/scripts/gemini.py" --backend gemini-cli --model pro "Draft a function that ...: ..."
-python3 "$SKILL/scripts/gemini.py" --backend fm "Rewrite this paragraph more concisely: ..."
-python3 "$SKILL/scripts/gemini.py" --backend ollama "Draft a Python function that ...: ..."
-```
-
-- `openai` is the **generic socket**: any provider or server speaking the OpenAI
-  `/chat/completions` dialect. `--base-url` shorthands: **`groq` | `openrouter` | `openai` |
-  `ollama`** (or any full `.../v1` URL / `OPENAI_BASE_URL`). Auth: `OPENAI_API_KEY` env
-  (Groq prefers `GROQ_API_KEY`); local servers need none. Built-in 429/5xx retry (free tiers
-  rate-limit), and a proper User-Agent (Cloudflare-fronted APIs 403 bare urllib). Groq with
-  `--model openai/gpt-oss-120b` = free-tier frontier-adjacent at extreme speed.
-  **Caveat: free cloud tiers commonly train on your data — keep private work on `ollama`/`fm`.**
-
-```bash
-python3 "$SKILL/scripts/gemini.py" --backend openai --base-url groq \
-  --model openai/gpt-oss-120b "Draft a data-model for ..."
-```
-
-**No Gemini account? You don't need one.** If `GEMINI_API_KEY` isn't set, don't dead-end — run fully
-local with no account via `--backend ollama`. Offer **Gemma** (Google's open model: `gemma3:12b` /
-`gemma3:27b`) for general text, or **qwen2.5-coder** for code. Point the user at
-`scripts/setup_local_model.sh` to pick one sized to their disk. (Getting a free key at
-https://aistudio.google.com/apikey is still the faster, stronger path — mention it — but it's optional.)
-
-## Model choice (auto-tier)
-
-- **`flash`** (default, `gemini-flash-latest`): bulk summarization, extraction, classification,
-  simple drafts. Fast and cheap — your default for high-volume work.
-- **`pro`** (`gemini-pro-latest`): hard reasoning, nuanced research synthesis, tricky code.
-  Reach for it when Flash's quality isn't enough.
-
-Start on Flash; **escalate to Pro only if the Flash output is weak.** Don't default to Pro —
-that spends the user's Gemini quota faster for no benefit on easy tasks.
-
-**For code, default to Pro, not Flash.** A coding bake-off across six free backends (correctness
-*and* a judged design rubric) found `gemini-pro` the clear winner on both — 5/5 on hidden-test
-tasks and the only model that got concurrency *and* validation right in the design task. Flash and
-the local models each dropped tasks or shipped subtler design flaws. So for **code generation,
-design, refactors, and bug-review, use `--model pro`**; Flash stays the default for bulk *text*.
-
-**Best offline/local model for quality = `--backend ollama --model gemma4:26b`** (17 GB MoE,
-~3.8B active; native tools + vision + thinking). In the author's eval-harness testing
-it swept all 12 correctness tasks — including
-the one `qwen3-coder:30b` missed — and won the design rubric 22/24 vs 17.5/24, one point
-behind gemini-pro's ~24/24 ceiling. Earned tiers (two consecutive runs): **trusted** for
-code-gen, structured extraction, and repo bug-fix/feature edits; **assist** (verify fully)
-for whole-app builds. Trade-off: thinking makes one-shot drafts slower (20–90s vs
-qwen3-coder's 2–8s), so **`qwen3-coder:30b` stays the ollama default for fast bulk drafts**.
-`qwen2.5-coder:14b` = lighter backup (agentic via JSON-fallback). Use local when work must
-stay private/offline or run unlimited; escalate to `pro` when a task resists local attempts. And regardless of model: **the model drafts, you verify** — every backend
-evaluated, winners included, has shipped at least one bug a review had to catch.
+- **Quality code / app builds:** `gpt-oss:20b` (12 GB) — TRUSTED code-gen/struct/edits/
+  app-builds (double perfect sweep). Review watch-item: reasoning residue (commented-out
+  debug prints, dead branches, doc claims for absent code).
+- **Vision + design:** `gemma4:26b` (17 GB) — auto-picked when images present. Design-crown
+  holder (discipline: claims match code). **Vision rule: tile tall scrolling captures —
+  small text on full-page images gets confidently invented.**
+- **Fast bulk drafts:** `qwen3-coder:30b` (18 GB) — ollama default; 2–8s one-shots.
+- **Lighter backup:** `qwen2.5-coder:14b` (9 GB). First-time setup: `bash "$SKILL/scripts/setup_local_model.sh"` — disk-aware, offers a tier sized to free space. No Gemini account needed for local.
+- **Bench / second opinion:** `agents-a1` (21 GB, trusted everywhere, no lane) — decorrelated
+  lineage; premium consensus/witness third voice. `llama3.2:3b` = tiny text floor only.
+- **Cloud model choice:** `flash` for bulk text; **`pro` for code/design/research synthesis**
+  and as escalation when local attempts fail.
+- Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
 
 ## Agentic offload — smith_agent.py (sandboxed tool loop)
 
-For multi-step *repo* tasks — fix a bug in a small project, add a feature, build a working
-app from a spec — one-shot generation isn't enough. `scripts/smith_agent.py` runs a model
-in a tool loop (list_files / read_file / write_file / run_command / finish) sandboxed to a
-working directory, iterating until its own verification passes:
+Multi-step repo tasks (fix a bug, add a feature, build a small app):
 
 ```bash
-python3 "$SKILL/scripts/smith_agent.py" --model gemma4:26b \
-  --workdir /path/to/scratch-project --prompt-file task.txt
-# cloud escalation (frontier quality, ~5x slower, rate-limit risk):
-#   --backend gemini --model pro
+python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
+  --workdir /path/to/SCRATCH --prompt-file task.txt
+# big single-file writes: add --max-gen-tokens 4096 (default 1600 truncates them)
+# cloud escalation: --backend gemini --model pro (5x slower, 503 risk)
 ```
 
-Rules of engagement: point it ONLY at a scratch/sandbox directory (it executes
-model-generated shell there — never at a live repo); write the task like a good ticket
-(spec, exact output formats, how to verify); seed a `test_public.py` so the agent has an
-executable definition of done; **verify the result yourself** before using it. Earned
-trust (author's eval harness): gemma4:26b trusted on repo edits, assist on app builds;
-gemini backend 5/5 quality but 300–640s/task with occasional mid-loop 503s — escalation
-path, not default.
+Rules: SCRATCH dirs only (it executes model shell — never a live repo); write the task like
+a ticket (spec, exact outputs, how to verify); seed a `test_public.py`; **verify the result
+yourself**, then verdict it.
 
-## Progress tracking — the usage ledger
+## Local transcription — transcribe.py (audio → text, free, private)
 
-Every `gemini.py` and `smith_agent.py` run appends one JSON line to
-`data/usage.jsonl` in this skill dir (timestamp, backend, model, size/turns, duration,
-outcome; `SMITH_LEDGER` env overrides the path). Logging is fail-safe — it can never
-break a run — and `gemini.py` currently records successful completions only, while
-`smith_agent.py` records every outcome including failures. To review delegation
-progress: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
-**Verdicts close the loop:** `ok` means COMPLETED, not CORRECT — after reviewing a
-delegated output, record what the review found:
-`python3 "$SKILL/scripts/verdict.py" good` (marks the most recent run; `--model`/`--script`
-to target others) or `verdict.py bad "what was wrong"`. **Add `--tag TASKTYPE`** (classify,
-draft-code, vision-triage, research, app-build, …) — tagged verdicts feed the report's
-**"routing weights (hebbian)"** section: per (task-shape, model) quality + a consecutive-good
-streak that suggests a review tier (streak ≥5 → light review, ≥10 → trusted-shape/spot-check).
-Routes strengthen with good verdicts and reset on a bad — earned trust that updates itself.
-The report also shows the overall quality rate and lists every verified-bad with its note.
-**Feed failures back:** every `bad` verdict is a ready-made regression test — the task
-shape that failed deserves one before you delegate that shape again.
-**Witness drift sensor (verification never reaches zero):** a sampled fraction of LOCAL
-runs (`SMITH_WITNESS_RATE`, default 5%) is silently re-run on a second model
-(`SMITH_WITNESS_MODEL`, default gpt-oss:20b) and compared. Agreement is logged;
-disagreement raises a DRIFT SIGNAL in the report for review — never an auto-verdict (the
-witness may be the wrong one). Free (local-only), skips images and prose-length outputs.
-This is how trusted routing stays *continuously re-earned* — silent model regressions get
-caught by sampling, not by faith.
+`python3 "$SKILL/scripts/transcribe.py" FILE` (wav/mp3/m4a/aiff; `--timestamps`;
+`--model small` for speed). mlx-whisper on Apple Silicon, ~2–4s per clip after load,
+~98% semantic accuracy (measured). **Caveat: verify rare proper nouns by eye** (Sanskrit/
+domain terms can be misheard). Pattern: transcribe locally, then offload the text digest.
 
-## Token economy
+## Progress tracking — ledger, verdicts, routing weights, witness
 
-The point is to move the *big raw inputs and the bulky generation* onto Gemini, while keeping
-only the *result* in your context. So: let Gemini ingest the giant PDF and return a 1-page
-digest; don't read the PDF yourself first. But never skip the review step — an unverified
-Gemini answer that's wrong costs more (in your time and the user's trust) than it saved.
+- Every run appends one JSON line to `data/usage.jsonl` (fail-safe; `SMITH_LEDGER` overrides).
+  Review: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
+- **Verdicts:** `ok` = completed, not correct. After review:
+  `verdict.py good|bad "why" [--tag TASKTYPE] [--model M] [--script S]`. Tags feed the
+  report's **hebbian routing weights**: per (task-shape, model) quality + streak → review
+  tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
+- **Feed failures back:** every `bad` = a ready-made regression test — build one before
+  that shape is delegated again.
+- **Witness drift sensor:** `SMITH_WITNESS_RATE` (default 5%) of local runs silently re-run
+  on `SMITH_WITNESS_MODEL` (default gpt-oss:20b) and compared; disagreement = DRIFT SIGNAL
+  in the report (never an auto-verdict). Verification never reaches zero.
 
 ## Troubleshooting
 
-- **`GEMINI_API_KEY is not set`** → ask the user to set it (`export GEMINI_API_KEY=…` on
-  macOS/Linux, `setx GEMINI_API_KEY "…"` on Windows), then retry in a fresh shell.
-- **HTTP 429 (rate limit)** → the script auto-retries with backoff; if it persists, wait a
-  beat or switch flash↔pro (separate quota buckets).
-- **Model not found** → run `--list-models` to see what this key can use.
-- **Weak / garbled output** → tighten the prompt, lower `--temperature`, or escalate to `pro`.
-- **Blocked prompt / empty response** → the script reports the block reason on stderr; rephrase.
+- `GEMINI_API_KEY is not set` → user exports it, fresh shell.
+- HTTP 429 → auto-retries; persistent → switch flash↔pro or `gemini-cli`.
+- Model not found → `--list-models`. Weak output → tighten prompt, lower temp, escalate pro.
+- Blocked/empty → block reason is on stderr; rephrase.
