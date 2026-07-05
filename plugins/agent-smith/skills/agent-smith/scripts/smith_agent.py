@@ -47,6 +47,9 @@ Rules:
 - Provided tests may not cover every requirement. Before finishing, re-read the task
   and confirm EVERY stated requirement yourself (write and run your own checks if needed).
 - If a command fails, read the error, fix the cause, and try again.
+- Keep every tool call SMALL. For multi-line checks or scripts, write_file them
+  (e.g. check.py) and run `python3 check.py` — never put long heredocs or multi-line
+  code inside a run_command argument.
 - Do not get stuck re-running commands. If you have run commands two or more times
   without writing a file in between, or you see the same error twice, STOP inspecting:
   re-read the relevant file and write_file a concrete fix. Re-running the same check
@@ -272,7 +275,9 @@ def parse_fallback_calls(content):
     return calls
 
 
-MAX_GEN_TOKENS = 1600  # one tool call + a full file; caps temp-0 repetition loops
+MAX_GEN_TOKENS = 1600  # one tool call + a full file; caps temp-0 repetition loops.
+# NOTE: a single native write_file call bigger than this gets TRUNCATED mid-JSON and
+# Ollama 500s ("error parsing tool call"). Raise per-run with --max-gen-tokens.
 
 
 def chat(model, messages, num_ctx):
@@ -367,6 +372,7 @@ def _ledger(rec):
 
 
 def main():
+    global MAX_GEN_TOKENS
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--workdir", required=True)
@@ -377,10 +383,14 @@ def main():
     ap.add_argument("--base-url", default="http://localhost:8080",
                     help="openai backend server (e.g. mlx_lm server)")
     ap.add_argument("--transcript", default=None)
+    ap.add_argument("--max-gen-tokens", type=int, default=MAX_GEN_TOKENS,
+                    help="per-turn generation cap (default 1600). Raise for tasks that "
+                         "write large single files.")
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
                          "(measured null result on qwen2.5-coder:14b, 2026-07-01)")
     args = ap.parse_args()
+    MAX_GEN_TOKENS = args.max_gen_tokens
 
     workdir = os.path.realpath(args.workdir)
     with open(args.prompt_file) as f:

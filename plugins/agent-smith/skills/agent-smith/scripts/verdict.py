@@ -30,6 +30,8 @@ def main():
     ap.add_argument("--script", choices=["gemini", "smith_agent"],
                     help="target the most recent run of this script")
     ap.add_argument("--ts", help="target the run with this exact ts")
+    ap.add_argument("--tag", help="task-shape label for routing weights "
+                    "(e.g. classify, draft-code, vision-triage, research, app-build)")
     args = ap.parse_args()
 
     if args.verdict == "bad" and not args.note:
@@ -46,6 +48,8 @@ def main():
             try:
                 r = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(r, dict):
                 continue
             if r.get("script") == "verdict":
                 continue
@@ -69,11 +73,14 @@ def main():
            "script": "verdict", "verdict": args.verdict, "note": args.note,
            "ref_ts": target.get("ts"), "ref_model": target.get("model"),
            "ref_script": target.get("script")}
+    if args.tag:
+        rec["tag"] = args.tag
     with open(LEDGER, "a") as f:
         f.write(json.dumps(rec) + "\n")
     desc = (f"{target.get('script')}:{target.get('model')} @ {target.get('ts')}"
             + (f" — {target.get('task', '')[:60]}" if target.get("task") else ""))
     print(f"marked {args.verdict.upper()}: {desc}"
+          + (f"  [tag: {args.tag}]" if args.tag else "")
           + (f"  ({args.note})" if args.note else ""))
     if args.verdict == "bad":
         print("-> feed it back: this task shape deserves a regression test "

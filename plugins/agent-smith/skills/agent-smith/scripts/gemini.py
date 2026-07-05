@@ -578,13 +578,33 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
     return text
 
 
+def _normalize_output(text):
+    """Normalize a model output for consensus comparison: strip, casefold, and
+    collapse every internal whitespace run to a single space."""
+    return re.sub(r"\s+", " ", (text or "").strip().casefold())
+
+
+def _outputs_agree(a, b):
+    """True when two model outputs agree after normalization. Exact-match voting —
+    only meaningful for SHORT structured outputs (classify/extract), not prose."""
+    return _normalize_output(a) == _normalize_output(b)
+
+
 def run_batch(args, prompt):
     """--batch MANIFEST: run one prompt over many files on the LOCAL backend, writing one
     output file per item — Claude stays out of the per-item loop entirely (zero tokens/item).
     Manifest = one input path per line (# comments / blank lines skipped). Images
     (png/jpg/jpeg/gif/webp) attach as vision input (auto-picks gemma4:26b); other files are
     read as text (first 24K chars) and appended to the prompt. Per-item results land in
-    --out-dir as <name>.out.txt; ONE JSON summary prints to stdout."""
+    --out-dir as <name>.out.txt; ONE JSON summary prints to stdout.
+
+    --consensus MODEL2 additionally runs every item on MODEL2 (temperature forced to 0 for
+    BOTH models unless the user passed --temperature). Agreement (normalized-equal outputs)
+    writes <name>.out.txt as usual; disagreement writes <name>.A.txt (primary) +
+    <name>.B.txt (MODEL2) and queues the item's input path in <out-dir>/_escalate.txt.
+    An escalated item is a SUCCESSFUL item: ok = agreed + escalated, and the ledger status
+    stays "ok" unless the failed list is non-empty. A backend error from EITHER model puts
+    the item on the failed list instead of the escalation queue."""
     IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
     if args.backend != "ollama":
         log("ERROR: --batch runs on --backend ollama only (free/unlimited is the point; "
@@ -595,6 +615,9 @@ def run_batch(args, prompt):
         sys.exit(2)
     if not prompt.strip():
         log("ERROR: --batch needs a prompt (the operation to run on each item).")
+        sys.exit(2)
+    if args.consensus is not None and not args.consensus.strip():
+        log("ERROR: --consensus needs a non-empty MODEL2.")
         sys.exit(2)
     t0 = time.time()
     try:
@@ -609,9 +632,26 @@ def run_batch(args, prompt):
         sys.exit(2)
     any_img = any(p.lower().endswith(IMG_EXTS) for p in items)
     model = args.model or ("gemma4:26b" if any_img else "qwen3-coder:30b")
+    consensus = args.consensus
+    temperature = args.temperature
+    if consensus:
+        if consensus == model:
+            log(f"ERROR: --consensus MODEL2 equals the effective primary model ({model}) — "
+                "two votes from one model is no consensus. Pick a different model.")
+            sys.exit(2)
+        if temperature is None:
+            temperature = 0.0  # determinism: exact-match voting wants repeatable outputs
+        if any_img:
+            log(f"note: manifest contains images — MODEL2 ({consensus}) must be a vision "
+                "model, or its votes will be silent garbage.")
     out_dir = args.out_dir or (os.path.splitext(args.batch)[0] + "_out")
     os.makedirs(out_dir, exist_ok=True)
+    escalate_path = os.path.join(out_dir, "_escalate.txt")
+    if consensus:
+        # The escalation queue describes THIS run only — truncate any previous run's.
+        open(escalate_path, "w").close()
     ok, failed, consec_exit = 0, [], 0
+    agreed, escalated = 0, 0
     for i, path in enumerate(items, 1):
         base = os.path.basename(path)
         log(f"[{i}/{len(items)}] {base} ...")
@@ -627,15 +667,42 @@ def run_batch(args, prompt):
             else:
                 with open(path, "r", errors="replace") as fh:
                     item_prompt = f"{prompt}\n\n--- {base} ---\n{fh.read(24_000)}"
-            text = call_ollama(item_prompt, args.system, args.temperature, model,
+            text = call_ollama(item_prompt, args.system, temperature, model,
                                args.max_tokens, images)
-            with open(os.path.join(out_dir, base + ".out.txt"), "w") as fh:
-                fh.write(text)
-            ok += 1
+            out_path = os.path.join(out_dir, base + ".out.txt")
+            if consensus:
+                text2 = call_ollama(item_prompt, args.system, temperature, consensus,
+                                    args.max_tokens, images)
+                a_path = os.path.join(out_dir, base + ".A.txt")
+                b_path = os.path.join(out_dir, base + ".B.txt")
+                if _outputs_agree(text, text2):
+                    with open(out_path, "w") as fh:
+                        fh.write(text)
+                    for stale in (a_path, b_path):  # re-run: item disagreed last time
+                        if os.path.exists(stale):
+                            os.remove(stale)
+                    agreed += 1
+                else:
+                    with open(a_path, "w") as fh:
+                        fh.write(text)
+                    with open(b_path, "w") as fh:
+                        fh.write(text2)
+                    if os.path.exists(out_path):  # re-run: item agreed last time
+                        os.remove(out_path)
+                    with open(escalate_path, "a") as fh:
+                        fh.write(path + "\n")
+                    escalated += 1
+                    log(f"  DISAGREE: escalated ({base}.A.txt vs {base}.B.txt)")
+            else:
+                with open(out_path, "w") as fh:
+                    fh.write(text)
+            ok += 1  # consensus mode: ok = agreed + escalated (both calls succeeded)
             consec_exit = 0
         except SystemExit:
             # call_ollama exits on server/model errors; count as an item failure, but
             # three in a row means the backend is down — stop wasting the queue.
+            # With --consensus this counts AT MOST ONCE PER ITEM (whichever of the two
+            # calls exited) and resets only when BOTH calls succeed.
             failed.append(base)
             consec_exit += 1
             if consec_exit >= 3:
@@ -648,12 +715,20 @@ def run_batch(args, prompt):
     summary = {"batch": len(items), "ok": ok, "failed": failed[:20],
                "failed_count": len(failed), "out_dir": out_dir, "model": model,
                "seconds": round(time.time() - t0, 1)}
+    rec = {"script": "gemini", "backend": "ollama", "model": model,
+           "batch": len(items), "ok": ok, "failed_count": len(failed),
+           "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
+           "seconds": summary["seconds"],
+           # escalations are successes awaiting review — only real failures flip status
+           "status": "ok" if not failed else "partial"}
+    if consensus:
+        summary["consensus_model"] = consensus
+        summary["agreed"] = agreed
+        summary["escalated"] = escalated
+        rec.update({"consensus_model": consensus, "agreed": agreed,
+                    "escalated": escalated})
     print(json.dumps(summary))
-    _ledger({"script": "gemini", "backend": "ollama", "model": model,
-             "batch": len(items), "ok": ok, "failed_count": len(failed),
-             "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
-             "seconds": summary["seconds"],
-             "status": "ok" if not failed else "partial"})
+    _ledger(rec)
 
 
 def main():
@@ -699,11 +774,26 @@ def main():
                          "to --out-dir, prints ONE JSON summary. Zero Claude tokens per item.")
     ap.add_argument("--out-dir", default=None, dest="out_dir",
                     help="--batch output directory (default: <manifest>_out).")
+    ap.add_argument("--consensus", default=None, metavar="MODEL2",
+                    help="Consensus batch mode (requires --batch, ollama backend only): run "
+                         "every item on BOTH the primary model and MODEL2 (temperature 0 "
+                         "unless --temperature). Agreement writes <name>.out.txt as normal; "
+                         "disagreement writes <name>.A.txt/<name>.B.txt and appends the item "
+                         "to <out-dir>/_escalate.txt (re-run those on a stronger model, or "
+                         "review by hand). Designed for SHORT structured outputs "
+                         "(classify/extract) where exact-match voting is meaningful. MODEL2 "
+                         "must differ from the primary, and must be a vision model when the "
+                         "manifest contains images.")
     ap.add_argument("--preflight", action="store_true",
                     help="Treat the output as Python code: syntax-check it (no execution) and, on a "
                          "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
     args = ap.parse_args()
     t0 = time.time()
+
+    if args.consensus and (not args.batch or args.backend != "ollama"):
+        log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "
+            "(two local models vote per item; disagreement fires escalation).")
+        sys.exit(2)
 
     if args.list_models:
         key = api_key()

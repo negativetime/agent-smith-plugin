@@ -14,6 +14,12 @@ LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "usage.jsonl")
 
 
+def run_key(r):
+    """Identity of a run for verdict lookup — ts alone has only seconds
+    resolution, so two runs in the same second would collide."""
+    return (r.get("ts"), r.get("script"), r.get("model"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--last", type=int, default=10, help="recent rows to show")
@@ -30,10 +36,14 @@ def main():
                 r = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(r, dict):
+                continue
             if r.get("script") == "verdict":
-                verdicts[r.get("ref_ts")] = r  # last verdict for a run wins
+                key = (r.get("ref_ts"), r.get("ref_script"), r.get("ref_model"))
+                verdicts[key] = r  # last verdict for a run wins
             else:
                 rows.append(r)
+    all_rows = rows  # routing weights are cumulative — never filtered by --today
     if args.today:
         import datetime
         today = datetime.date.today().isoformat()
@@ -55,8 +65,8 @@ def main():
         print(f"agentic (smith_agent): {len(agentic)} runs, "
               f"{finished} finished ({finished/len(agentic):.0%}); "
               f"stops: {dict(Counter(r.get('stop') for r in agentic))}")
-    good = [r for r in rows if (verdicts.get(r.get("ts")) or {}).get("verdict") == "good"]
-    bad = [r for r in rows if (verdicts.get(r.get("ts")) or {}).get("verdict") == "bad"]
+    good = [r for r in rows if (verdicts.get(run_key(r)) or {}).get("verdict") == "good"]
+    bad = [r for r in rows if (verdicts.get(run_key(r)) or {}).get("verdict") == "bad"]
     if good or bad:
         rate = len(good) / (len(good) + len(bad))
         print(f"verified: {len(good)} good, {len(bad)} bad "
@@ -66,15 +76,38 @@ def main():
     print("by model:")
     for k, n in by_model.most_common():
         print(f"  {n:4}  {k}")
+    routes = {}  # (tag, model) -> [(run_ts, verdict), ...] judged runs only
+    for r in all_rows:
+        v = verdicts.get(run_key(r))
+        if not v or v.get("verdict") not in ("good", "bad"):
+            continue
+        pair = (v.get("tag") or "untagged", r.get("model") or "?")
+        routes.setdefault(pair, []).append((r.get("ts") or "", v["verdict"]))
+    if routes:
+        print("routing weights (hebbian):")
+        for (tag, model), judged in sorted(routes.items(),
+                                           key=lambda kv: (-len(kv[1]), kv[0])):
+            judged.sort()  # run-ts order; unreviewed runs never enter the chain
+            goods = sum(1 for _, verdict in judged if verdict == "good")
+            bads = len(judged) - goods
+            streak = 0
+            for _, verdict in reversed(judged):
+                if verdict != "good":
+                    break
+                streak += 1
+            tier = ("trusted-shape (spot-check only)" if streak >= 10
+                    else "light review" if streak >= 5 else "full review")
+            print(f"  {tag} @ {model}: {goods} good, {bads} bad, "
+                  f"{goods/len(judged):.0%} quality, streak {streak} -> {tier}")
     if bad:
         print("\nverified-BAD (regression-test feed):")
         for r in bad[-10:]:
-            v = verdicts[r.get("ts")]
+            v = verdicts[run_key(r)]
             print(f"  {r.get('ts','?')[:19]}  {r.get('script')}:{r.get('model')}  "
                   f"— {v.get('note', '(no note)')[:90]}")
     print(f"\nlast {min(args.last, len(rows))} runs:")
     for r in rows[-args.last:]:
-        v = verdicts.get(r.get("ts"))
+        v = verdicts.get(run_key(r))
         mark = {"good": " ✓", "bad": " ✗"}.get((v or {}).get("verdict"), "")
         if r.get("script") == "smith_agent":
             desc = (f"{'PASS' if r.get('finished') else 'fail'} "

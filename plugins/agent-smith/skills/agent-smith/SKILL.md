@@ -155,6 +155,15 @@ python3 "$SKILL/scripts/gemini.py" --model pro --system "Senior Python engineer"
 # to the prompt; per-item results -> --out-dir/<name>.out.txt; ONE JSON summary back.
 python3 "$SKILL/scripts/gemini.py" --backend ollama --batch shots_manifest.txt \
   --out-dir triage "One line: what does this show, and is anything visibly broken?"
+
+# CONSENSUS batch ("disagreement fires escalation"): every item runs on TWO local
+# models at temp 0. Agreement (normalized) -> accepted as usual; disagreement -> both
+# answers saved as <name>.A.txt/.B.txt + the item queued in <out-dir>/_escalate.txt
+# for a stronger model or human review. Spends review attention EXACTLY on the items
+# most likely to be wrong. For SHORT structured outputs (classify/extract).
+python3 "$SKILL/scripts/gemini.py" --backend ollama --model llama3.2:3b \
+  --batch records.txt --consensus qwen2.5-coder:14b --out-dir cls \
+  "Answer with exactly one word: ..."
 ```
 
 **Windows (PowerShell)** — same flags, just the `python` launcher and the Windows path; pipe stdin
@@ -314,8 +323,12 @@ progress: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
 **Verdicts close the loop:** `ok` means COMPLETED, not CORRECT — after reviewing a
 delegated output, record what the review found:
 `python3 "$SKILL/scripts/verdict.py" good` (marks the most recent run; `--model`/`--script`
-to target others) or `verdict.py bad "what was wrong"`. The report then shows a true
-quality rate per model and lists every verified-bad with its note.
+to target others) or `verdict.py bad "what was wrong"`. **Add `--tag TASKTYPE`** (classify,
+draft-code, vision-triage, research, app-build, …) — tagged verdicts feed the report's
+**"routing weights (hebbian)"** section: per (task-shape, model) quality + a consecutive-good
+streak that suggests a review tier (streak ≥5 → light review, ≥10 → trusted-shape/spot-check).
+Routes strengthen with good verdicts and reset on a bad — earned trust that updates itself.
+The report also shows the overall quality rate and lists every verified-bad with its note.
 **Feed failures back:** every `bad` verdict is a ready-made regression test — the task
 shape that failed deserves one before you delegate that shape again.
 
