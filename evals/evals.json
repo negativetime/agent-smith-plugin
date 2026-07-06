@@ -1,0 +1,47 @@
+{
+  "skill_name": "agent-smith",
+  "notes": "Core thesis: the with_skill runs should offload the heavy lifting to Gemini (lower Claude token usage) while matching or beating baseline quality. Baseline = same prompt, no skill.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "research-grounded",
+      "prompt": "What is the most recent major version of macOS that Apple has released, including its marketing name and version number? Give me a tight 3-bullet summary of its headline features, and include the source links you relied on. Save the summary to macos_latest.md.",
+      "expected_output": "A short markdown summary naming the current macOS (e.g. macOS 26 'Tahoe'), 3 feature bullets, and at least one real source URL. With the skill, Claude should delegate the lookup to Gemini with --search and then verify, rather than relying on its own (possibly stale) knowledge.",
+      "files": [],
+      "assertions": [
+        {"text": "Names a current/recent macOS version and marketing name (not an old one like Sonoma/Sequoia)"},
+        {"text": "Contains a 3-bullet feature summary"},
+        {"text": "Includes at least one source URL"},
+        {"text": "with_skill: transcript shows it invoked scripts/gemini.py with --search (offloaded the research)"}
+      ]
+    },
+    {
+      "id": 1,
+      "name": "bulk-extract",
+      "prompt": "There's a long meeting transcript at /Users/joshualangberg/.claude/skills/agent-smith/evals/files/qbr_transcript.txt. Extract every action item into a markdown table with columns: Owner | Task | Due Date. Save the table to action_items.md.",
+      "expected_output": "A markdown table containing all 6 action items. Owners: Maria Chen, Raj Patel, Dana Whitfield, Tom Okafor, Lena Sorensen, Victor Alvarez. Due dates: 2026-07-10, 2026-06-30, 2026-08-15, 2026-07-01, 2026-06-22, 2026-09-05. With the skill, Claude should pass the file to Gemini via --file (letting Gemini ingest it) instead of reading the whole transcript into its own context.",
+      "files": ["/Users/joshualangberg/.claude/skills/agent-smith/evals/files/qbr_transcript.txt"],
+      "assertions": [
+        {"text": "Output contains all 6 owner names (Maria Chen, Raj Patel, Dana Whitfield, Tom Okafor, Lena Sorensen, Victor Alvarez)"},
+        {"text": "Output contains all 6 due dates (2026-07-10, 2026-06-30, 2026-08-15, 2026-07-01, 2026-06-22, 2026-09-05)"},
+        {"text": "Output is a markdown table with Owner/Task/Due Date columns"},
+        {"text": "with_skill: transcript shows it invoked scripts/gemini.py with --file (offloaded ingestion)"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "code-draft",
+      "prompt": "Write a Python function parse_duration(s) that converts an ISO-8601 duration string like 'PT1H30M' or 'P2DT3H15M' into a total number of seconds (integer). Include a handful of unit tests covering hours, minutes, seconds, and days. Save it to parse_duration.py and confirm the tests pass.",
+      "expected_output": "A parse_duration.py that imports cleanly and computes correctly: parse_duration('PT1H30M')==5400, parse_duration('P1D')==86400, parse_duration('PT45S')==45, parse_duration('P2DT3H15M')==184500. With the skill, Claude should draft with Gemini then run/verify the code itself before declaring done.",
+      "files": [],
+      "assertions": [
+        {"text": "parse_duration.py exists and imports without error"},
+        {"text": "parse_duration('PT1H30M') == 5400"},
+        {"text": "parse_duration('P1D') == 86400"},
+        {"text": "parse_duration('PT45S') == 45 and parse_duration('P2DT3H15M') == 184500"},
+        {"text": "File includes unit tests"},
+        {"text": "with_skill: transcript shows it invoked scripts/gemini.py to draft, then verified the code"}
+      ]
+    }
+  ]
+}

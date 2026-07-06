@@ -1,0 +1,7 @@
+{
+ "gemma4:26b": "5571076f3d70",
+ "gpt-oss:20b": "17052f91a42e",
+ "llama3.2:3b": "a80c4f17acd5",
+ "qwen2.5-coder-smith:14b": "61650e6dbf73",
+ "qwen3-coder:30b": "06c1097efce0"
+}

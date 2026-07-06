@@ -1,0 +1,110 @@
+QUARTERLY BUSINESS REVIEW — Q2 2026 — Full Transcript
+Attendees: Maria, Raj, Dana, Tom, Lena, Victor, and the exec staff.
+======================================================================
+
+Maria: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Raj: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Dana: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Tom: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Lena: Let's not rat-hole on that — we can take it offline with the account team.
+Victor: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+Priya: The board deck is due Friday and finance still needs the updated ARR bridge.
+Marcus: Honestly the support backlog is the thing keeping me up at night right now.
+Maria: We saw a nice bump in trial signups after the conference, about 18% week over week.
+Raj: Procurement is dragging on the new vendor, so that timeline is at risk.
+Dana: Can we circle back to the roadmap slide? I don't think product and sales are aligned.
+Tom: Agreed. And the EU prospects keep asking about data residency on every call.
+Priya: Okay, let's make that an action item. ACTION ITEM — Maria Chen will finalize the Helios pricing model; due 2026-07-10. Everyone good with that? ... Good, noted.
+
+Marcus: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+Maria: The board deck is due Friday and finance still needs the updated ARR bridge.
+Raj: Honestly the support backlog is the thing keeping me up at night right now.
+Dana: We saw a nice bump in trial signups after the conference, about 18% week over week.
+Tom: Procurement is dragging on the new vendor, so that timeline is at risk.
+Lena: Can we circle back to the roadmap slide? I don't think product and sales are aligned.
+Victor: Agreed. And the EU prospects keep asking about data residency on every call.
+Priya: Churn was flat at 3% which is fine, but logo churn ticked up among the SMB cohort.
+Marcus: I'd rather we slow down and get the pricing right than rush it for the quarter.
+Maria: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Raj: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Dana: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Priya: Okay, let's make that an action item. ACTION ITEM — Raj Patel will ship the onboarding redesign; due 2026-06-30. Everyone good with that? ... Good, noted.
+
+Priya: Can we circle back to the roadmap slide? I don't think product and sales are aligned.
+Marcus: Agreed. And the EU prospects keep asking about data residency on every call.
+Maria: Churn was flat at 3% which is fine, but logo churn ticked up among the SMB cohort.
+Raj: I'd rather we slow down and get the pricing right than rush it for the quarter.
+Dana: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Tom: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Lena: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Victor: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Priya: Let's not rat-hole on that — we can take it offline with the account team.
+Marcus: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+Maria: The board deck is due Friday and finance still needs the updated ARR bridge.
+Raj: Honestly the support backlog is the thing keeping me up at night right now.
+Priya: Okay, let's make that an action item. ACTION ITEM — Dana Whitfield will renegotiate the AWS contract; due 2026-08-15. Everyone good with that? ... Good, noted.
+
+Victor: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Priya: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Marcus: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Maria: Let's not rat-hole on that — we can take it offline with the account team.
+Raj: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+Dana: The board deck is due Friday and finance still needs the updated ARR bridge.
+Tom: Honestly the support backlog is the thing keeping me up at night right now.
+Lena: We saw a nice bump in trial signups after the conference, about 18% week over week.
+Victor: Procurement is dragging on the new vendor, so that timeline is at risk.
+Priya: Can we circle back to the roadmap slide? I don't think product and sales are aligned.
+Marcus: Agreed. And the EU prospects keep asking about data residency on every call.
+Maria: Churn was flat at 3% which is fine, but logo churn ticked up among the SMB cohort.
+Priya: Okay, let's make that an action item. ACTION ITEM — Tom Okafor will hire two backend engineers; due 2026-07-01. Everyone good with that? ... Good, noted.
+
+Lena: The board deck is due Friday and finance still needs the updated ARR bridge.
+Victor: Honestly the support backlog is the thing keeping me up at night right now.
+Priya: We saw a nice bump in trial signups after the conference, about 18% week over week.
+Marcus: Procurement is dragging on the new vendor, so that timeline is at risk.
+Maria: Can we circle back to the roadmap slide? I don't think product and sales are aligned.
+Raj: Agreed. And the EU prospects keep asking about data residency on every call.
+Dana: Churn was flat at 3% which is fine, but logo churn ticked up among the SMB cohort.
+Tom: I'd rather we slow down and get the pricing right than rush it for the quarter.
+Lena: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Victor: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Priya: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Marcus: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Priya: Okay, let's make that an action item. ACTION ITEM — Lena Sorensen will publish the Q2 security audit; due 2026-06-22. Everyone good with that? ... Good, noted.
+
+Tom: Agreed. And the EU prospects keep asking about data residency on every call.
+Lena: Churn was flat at 3% which is fine, but logo churn ticked up among the SMB cohort.
+Victor: I'd rather we slow down and get the pricing right than rush it for the quarter.
+Priya: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Marcus: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Maria: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Raj: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Dana: Let's not rat-hole on that — we can take it offline with the account team.
+Tom: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+Lena: The board deck is due Friday and finance still needs the updated ARR bridge.
+Victor: Honestly the support backlog is the thing keeping me up at night right now.
+Priya: We saw a nice bump in trial signups after the conference, about 18% week over week.
+Priya: Okay, let's make that an action item. ACTION ITEM — Victor Alvarez will launch the EU data-residency option; due 2026-09-05. Everyone good with that? ... Good, noted.
+
+Maria: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Raj: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Dana: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Tom: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Lena: Let's not rat-hole on that — we can take it offline with the account team.
+Victor: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+Priya: The board deck is due Friday and finance still needs the updated ARR bridge.
+Marcus: Honestly the support backlog is the thing keeping me up at night right now.
+Maria: We saw a nice bump in trial signups after the conference, about 18% week over week.
+Raj: Procurement is dragging on the new vendor, so that timeline is at risk.
+Dana: Can we circle back to the roadmap slide? I don't think product and sales are aligned.
+Tom: Agreed. And the EU prospects keep asking about data residency on every call.
+Lena: Churn was flat at 3% which is fine, but logo churn ticked up among the SMB cohort.
+Victor: I'd rather we slow down and get the pricing right than rush it for the quarter.
+Priya: So, picking up from where we left off last quarter, the numbers are broadly in line with plan.
+Marcus: I think the bigger question is whether the funnel conversion holds once we raise prices.
+Maria: Right, and remember marketing wanted another two weeks before we commit to the webinar push.
+Raj: Customer success flagged three enterprise accounts that are wobbling on renewal.
+Dana: Let's not rat-hole on that — we can take it offline with the account team.
+Tom: Engineering velocity dipped in May because of the on-call load, but it's recovering.
+
+Priya: Great session everyone. Same time next quarter.
