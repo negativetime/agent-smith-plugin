@@ -280,10 +280,12 @@ MAX_GEN_TOKENS = 1600  # one tool call + a full file; caps temp-0 repetition loo
 # Ollama 500s ("error parsing tool call"). Raise per-run with --max-gen-tokens.
 
 
-def chat(model, messages, num_ctx):
-    payload = {"model": model, "messages": messages, "tools": TOOLS, "stream": False,
+def chat(model, messages, num_ctx, tools=True):
+    payload = {"model": model, "messages": messages, "stream": False,
                "options": {"temperature": 0, "num_ctx": num_ctx,
                            "num_predict": MAX_GEN_TOKENS}}
+    if tools:
+        payload["tools"] = TOOLS
     req = urllib.request.Request(OLLAMA + "/api/chat",
                                  json.dumps(payload).encode(),
                                  {"Content-Type": "application/json"})
@@ -422,6 +424,7 @@ def main():
     t0 = time.time()
     finished, stop = False, "max_turns"
     turn, nudged, finish_bounced = 0, False, False
+    native_ok = True  # flips False after an ollama tool-parse 500 -> fallback protocol
     for turn in range(1, args.max_turns + 1):
         try:
             if backend == "gemini":
@@ -432,11 +435,25 @@ def main():
                 msg = chat_openai(args.model, messages, args.base_url)
                 messages.append(msg)
             else:
-                resp = chat(args.model, messages, args.num_ctx)
+                resp = chat(args.model, messages, args.num_ctx, tools=native_ok)
                 msg = resp.get("message", {})
                 messages.append(msg)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")[:500]
+            if (backend == "ollama" and native_ok and exc.code == 500
+                    and "parsing tool call" in body):
+                # SELF-HEAL: Ollama's server-side tool parser choked (truncated or
+                # complex call — the known killer). Drop native tool schemas for the
+                # REST OF THE SESSION and continue via the JSON-fallback protocol,
+                # which our client-side parser handles gracefully. The failed turn's
+                # output is lost, but the session survives.
+                native_ok = False
+                push_user("[system note] Native tool calling is failing on this "
+                          "server. From now on respond with exactly ONE tool call "
+                          "per turn as a ```json block: "
+                          '{"name": ..., "arguments": {...}}. ' + WRITE_CONVENTION)
+                log("self_heal", {"turn": turn, "reason": body[:200]})
+                continue
             stop = f"error:http-{exc.code}:{body}"
             log("error", stop)
             break

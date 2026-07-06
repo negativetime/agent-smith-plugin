@@ -158,6 +158,16 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
 - **Feed failures back:** every `bad` = a ready-made regression test — build one before
   that shape is delegated again.
+- **Fleet identity check:** `ollama pull` updates weights IN PLACE — a trusted model can
+  silently become a different model. `python3 "$SKILL/scripts/fleet_check.py"` compares
+  current digests vs the accepted baseline (`--accept` after a deliberate update + re-gate);
+  run it when anything smells off, and always after pulling updates.
+- **Self-healing tool calls:** if Ollama's server-side tool parser 500s mid-session
+  (truncated/complex calls — the known killer), smith_agent now drops native tool schemas
+  and continues the SAME session via the JSON-fallback protocol instead of dying.
+- **Ollama-down failover:** the whole local fleet also runs through any OpenAI-compatible
+  server via `--backend openai --base-url` (llama-server, `mlx_lm server`, LM Studio).
+  Ollama is the hub, not a dependency.
 - **Witness drift sensor (trust has a forgetting curve):** local runs are silently re-run
   on `SMITH_WITNESS_MODEL` (default gpt-oss:20b) on an FSRS-style schedule — the interval
   grows with each consecutive agreement (every 4 runs -> 8 -> 16 ... cap 256) and COLLAPSES
