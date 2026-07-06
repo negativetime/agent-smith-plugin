@@ -7,7 +7,8 @@
 #
 # It detects how much disk you have free and offers a model tier sized to it —
 # more space lets you run a bigger, better coder. Picks are from agent-smith's
-# coding bake-off (qwen2.5-coder family won the local slot; 14B is the sweet spot).
+# eval harness (gpt-oss:20b holds the code crown: double perfect sweep, trusted
+# for agentic app builds; qwen3-coder:30b = speed pick; gemma4:26b = vision+design).
 #
 # Usage:  bash setup_local_model.sh
 #
@@ -41,9 +42,10 @@ if [ -z "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ]; then
 fi
 
 recommend=""
-if   [ "$free_gb" -ge 22 ]; then recommend="1 for code (qwen3-coder:30b) or 5 for general (gemma3:27b)"
-elif [ "$free_gb" -ge 12 ]; then recommend="2 for code (qwen2.5-coder:14b) or 4 for general (gemma3:12b)"
-elif [ "$free_gb" -ge 7  ]; then recommend="3 for code (qwen2.5-coder:7b) or 4 for general (gemma3:12b)"
+if   [ "$free_gb" -ge 22 ]; then recommend="1 for code (gpt-oss:20b), 2 for speed, or 4 for vision (gemma4:26b)"
+elif [ "$free_gb" -ge 16 ]; then recommend="1 for code (gpt-oss:20b)"
+elif [ "$free_gb" -ge 12 ]; then recommend="3 for code (qwen2.5-coder:14b)"
+elif [ "$free_gb" -ge 10 ]; then recommend="5 for general (gemma3:12b)"
 else                             recommend="6 (llama3.2:3b) — low on space"
 fi
 
@@ -51,24 +53,25 @@ echo "Best fit for your free space: ${recommend}"
 echo
 echo "Choose a local model (bigger = better, needs more space):"
 echo "  -- for CODE (best local coders, from agent-smith's bake-off) --"
-echo "  1) qwen3-coder:30b     ~18 GB  recommended — best local coder (30B MoE, 3B active, fast; benchmarked default)"
-echo "  2) qwen2.5-coder:14b   ~9 GB   lighter, solid runner-up"
-echo "  3) qwen2.5-coder:7b    ~5 GB   smallest & fastest"
-echo "  -- for GENERAL text / no-Gemini-account use (Google's open Gemma) --"
-echo "  4) gemma3:12b          ~8 GB   well-rounded general model"
-echo "  5) gemma3:27b          ~17 GB  strongest general Gemma, if you have space"
-echo "  6) llama3.2:3b         ~2 GB   tiny floor — light text only"
+echo "  1) gpt-oss:20b         ~13 GB  RECOMMENDED — best measured local coder (trusted for"
+echo "                                 code, extraction, repo edits, AND agentic app builds)"
+echo "  2) qwen3-coder:30b     ~18 GB  fastest drafts (2-8s one-shots) — the speed pick"
+echo "  3) qwen2.5-coder:14b   ~9 GB   lighter code fallback"
+echo
+echo "  4) gemma4:26b          ~17 GB  vision (reads images!) + design + general quality"
+echo "  5) gemma3:12b          ~8 GB   small general model (older gen, low disk)"
+echo "  6) llama3.2:3b         ~2 GB   tiny floor — light text only, not for agents"
 echo "  7) skip"
 echo
 printf "Enter 1-7: "
 read -r choice
 
 case "$choice" in
-  1) model="qwen3-coder:30b";   need=22 ;;
-  2) model="qwen2.5-coder:14b"; need=12 ;;
-  3) model="qwen2.5-coder:7b";  need=8  ;;
-  4) model="gemma3:12b";        need=11 ;;
-  5) model="gemma3:27b";        need=21 ;;
+  1) model="gpt-oss:20b";       need=16 ;;
+  2) model="qwen3-coder:30b";   need=22 ;;
+  3) model="qwen2.5-coder:14b"; need=12 ;;
+  4) model="gemma4:26b";        need=21 ;;
+  5) model="gemma3:12b";        need=11 ;;
   6) model="llama3.2:3b";       need=4  ;;
   7|"") echo "Skipped. Set GEMINI_API_KEY for the cloud backend, or re-run to pick a local model."; exit 0 ;;
   *) echo "Unrecognized choice '$choice'. Re-run and pick 1-7." >&2; exit 1 ;;

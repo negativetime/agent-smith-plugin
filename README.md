@@ -72,12 +72,12 @@ It offers, by available disk:
 
 | For | Model | ~Size | Notes |
 |---|---|---|---|
-| **Code** | `qwen3-coder:30b` | 18 GB | **recommended** — best local coder (30B MoE, 3B active, fast; benchmarked) |
-| **Code** | `qwen2.5-coder:14b` | 9 GB | lighter, solid runner-up |
-| **Code** | `qwen2.5-coder:7b` | 5 GB | smallest & fastest |
-| **General / no-account Gemini alternative** | `gemma3:12b` | 8 GB | well-rounded |
-| **General** | `gemma3:27b` | 17 GB | strongest Gemma |
-| Light text | `llama3.2:3b` | 2 GB | tiny floor |
+| **Code** | `gpt-oss:20b` | 13 GB | **recommended** — best measured local coder; trusted for code, extraction, repo edits, and agentic app builds (double perfect sweep in the eval harness) |
+| **Code (speed)** | `qwen3-coder:30b` | 18 GB | fastest drafts (2–8s one-shots); quality crown belongs to gpt-oss |
+| **Code (lighter)** | `qwen2.5-coder:14b` | 9 GB | solid low-disk fallback |
+| **Vision + general** | `gemma4:26b` | 17 GB | reads images (screenshot triage), design-rubric champion, strong general model |
+| **General (small)** | `gemma3:12b` | 8 GB | older gen; fine for text on low disk |
+| Light text | `llama3.2:3b` | 2 GB | tiny floor — text only, not for agents |
 
 Then use `--backend ollama` (defaults to `qwen3-coder:30b`, or set `OLLAMA_MODEL`).
 
