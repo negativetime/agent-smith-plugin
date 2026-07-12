@@ -243,6 +243,20 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
         opts["temperature"] = temperature
     if max_tokens is not None:
         opts["num_predict"] = max_tokens
+    # Auto-size the context window: Ollama SILENTLY truncates the prompt to the server
+    # default (~32k here) — long digests would lose their head without warning. Estimate
+    # conservatively at 3 chars/token (markdown/code measures ~3.4; prose ~4) + output
+    # headroom, round up to a power-of-two step, cap at 131072 (gpt-oss:20b native;
+    # measured 2026-07-12: KV cost at 131k is negligible on MXFP4 MoE, 3/3 needle recall
+    # at 52k tokens).
+    est = len(prompt) // 3 + (len(system) // 3 if system else 0) + (max_tokens or 4096) + 512
+    if est > 8192:
+        ctx = 16384
+        while ctx < est and ctx < 131072:
+            ctx *= 2
+        opts["num_ctx"] = min(ctx, 131072)
+        if est > 131072:
+            log(f"WARNING: input ~{est} est. tokens exceeds the 131072 num_ctx cap — head will truncate. Split the input or use --backend gemini (1M context).")
     if opts:
         body["options"] = opts
     req = urllib.request.Request("http://localhost:11434/api/chat", method="POST",
@@ -883,7 +897,15 @@ def main():
                 print(m["name"].replace("models/", ""))
         return
 
-    prompt = args.prompt if args.prompt is not None else sys.stdin.read()
+    # Piped stdin is INPUT DATA: with a prompt arg it appends below the prompt (the
+    # documented `cat spec.txt | gemini.py "Make a checklist"` shape); with no prompt
+    # arg it IS the prompt. Previously stdin was silently dropped when a prompt arg
+    # was present — every backend lost the piped payload (caught 2026-07-12).
+    stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+    if args.prompt is not None:
+        prompt = f"{args.prompt}\n\n{stdin_text}" if stdin_text.strip() else args.prompt
+    else:
+        prompt = stdin_text
     if not prompt.strip() and not args.file:
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)

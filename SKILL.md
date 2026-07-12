@@ -15,7 +15,8 @@ description: >-
   work too: drafting a new module, class, CLI tool, or test suite from a clear spec; porting
   or translating code; or a multi-step scratch-sandbox build (fix-a-bug, add-a-feature,
   build-a-small-app) via the bundled smith_agent.py tool loop. Also trigger when the user
-  says "use Gemini" or "agent-smith", mentions the local fleet, or asks to save Claude tokens. Gemini drafts; Claude scopes,
+  says "use Gemini" or "agent-smith", mentions the local fleet, asks to save Claude tokens,
+  or asks where tokens go / to audit or reduce Claude token usage. Gemini drafts; Claude scopes,
   cross-checks, integrates, and delivers. Do NOT use for short/quick/interactive work, small
   edits, correctness-critical debugging, or security-sensitive tasks — and never for the
   EXECUTION half of a task: deploying to Cloudflare, posting to a live account, committing or
@@ -54,6 +55,7 @@ stays with you (backends have no credentials).
 | Website content | copy, blog/FAQ, first-draft HTML/CSS | wiring, voice/legal pass, browser test |
 | Cloudflare/infra | wrangler.toml, Dockerfiles, CI YAML *as text* | the deploy — your MCP + creds |
 | Business postings | announcement → per-platform posts | actual posting; final approval |
+| Info-doc HTML (the HTML-docs rule) | md-draft → styled HTML via `references/html-doc-shell.html` | the draft's content, parity check, saving |
 
 Full recipes: [references/playbooks.md](references/playbooks.md).
 
@@ -116,13 +118,44 @@ check) · `--list-models`. API internals: [references/gemini-api.md](references/
 - **Vision + design:** `gemma4:26b` (17 GB) — auto-picked when images present. Design-crown
   holder (discipline: claims match code). **Vision rule: tile tall scrolling captures —
   small text on full-page images gets confidently invented.**
+- **Vision pre-screen (NEW 2026-07-12):** `qwen3-vl:4b` (3.3 GB dl, ~8 GB loaded, 256k ctx) —
+  small enough to co-reside with gpt-oss:20b. Gate run 1: **9/9** on a verified screenshot
+  corpus incl. tiny-text OCR (SC editor dropdown + Key field) with no hallucination on
+  UI-truncated text. Use for "which screen is this / did the dialog open / read this field"
+  QA loops: `--backend ollama --model qwen3-vl:4b --file shot.png`. One more clean gate run
+  (fresh screenshots) earns TRUSTED per the 2-consecutive rule; gemma4:26b keeps the
+  quality/design crown.
 - **Fast bulk drafts:** `qwen3-coder:30b` (18 GB) — ollama default; 2–8s one-shots.
+- **Long private digests — NEW LANE (validated 2026-07-12):** `gpt-oss:20b` at up to
+  **131k context** — RAM stays flat at 12 GB (MXFP4 MoE), 3/3 needle recall + correct
+  comprehension measured at 52k tokens (~4.6 min). `gemini.py` now auto-sizes `num_ctx`
+  from input length (Ollama silently truncates otherwise). Use for transcripts/contracts/
+  logs too private for free cloud tiers; beyond ~130k tokens split it or use `--backend
+  gemini` (1M). Caveat: the witness re-run doubles the cost of a long-prompt call.
 - **Lighter backup:** `qwen2.5-coder-smith:14b` (9 GB, our gym-gated fine-tune).
 - **Bench / second opinion:** `agents-a1` (21 GB, trusted everywhere, no lane) — decorrelated
   lineage; premium consensus/witness third voice. `llama3.2:3b` = tiny text floor only.
 - **Cloud model choice:** `flash` for bulk text; **`pro` for code/design/research synthesis**
   and as escalation when local attempts fail.
+- **Residency (36 GB Mac, since the claude-mem observer went local 2026-07-12):** the observer
+  keeps `gpt-oss:20b` (12 GB) hot most of the day, and it + `qwen3-coder:30b` (18 GB) can't
+  co-reside in GPU memory — routine one-shots on the 26b/30b now pay a 20–60s swap and evict
+  the observer's model. Prefer `--model gpt-oss:20b` for routine local drafts; reach for
+  gemma4:26b (vision) / qwen3-coder:30b deliberately and expect the swap. If Ollama wedges
+  (model stuck "Stopping...", requests hang): `kill` the `llama-server` runner PID, or
+  restart Ollama.app.
 - Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
+
+## Standing offload targets — token audit 2026-07-12
+
+Measured: 136M Claude output tokens/30d, only 0.2% offloaded. Biggest single consumer
+(claude-mem observer, ~16% of ALL output) now runs on local `gpt-oss:20b` via claude-mem's
+openrouter provider → `http://127.0.0.1:11434/v1`. Ranked remaining targets — main-loop web
+research (habit gap: 679 searches + 701 fetches ran on Opus), read-only subagent fan-outs,
+first-draft code via smith_agent, screenshot pre-screening, session hygiene — with numbers,
+the claude-mem config/revert path, and the generalizable "point any custom-endpoint tool at
+the fleet" precedent: [references/token-audit-2026-07-12.md](references/token-audit-2026-07-12.md).
+Re-run the audit: `python3 /Users/joshualangberg/Python/docs/token_audit.py`.
 
 ## Agentic offload — smith_agent.py (sandboxed tool loop)
 

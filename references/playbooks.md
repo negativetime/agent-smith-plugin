@@ -121,6 +121,46 @@ platform limits, and confirm *you* approve before anything is posted.
 
 ---
 
+## 5. Info-doc HTML-ification (the HTML-docs rule, token-consciously)
+
+**Fires when:** saving ANY information doc for the user — brief, status doc, guide, handoff,
+README, PROJECT.html. The standing rule says styled self-contained HTML; HTML costs ~3× the
+tokens of markdown, so the styling premium goes to the fleet, not Claude.
+
+**The split:**
+- **Claude drafts the content tight** — markdown-shaped, complete, final wording. This IS the
+  correctness-critical half; the fleet must not write or alter content.
+- **Offload the conversion** — attach the draft + the house shell
+  (`references/html-doc-shell.html`, ~1KB CSS, light/dark, stable class set):
+
+```bash
+python3 "$SKILL/scripts/gemini.py" --model pro \
+  --file /path/to/draft.md --file "$SKILL/references/html-doc-shell.html" \
+  "Convert the markdown draft into a complete self-contained HTML document using the attached
+shell: reuse its <style> block VERBATIM and structure the content with its classes (h1+.sub
+header, h2 sections, .card, .tiles, tables with td.num, .pill). Preserve ALL draft content
+exactly — no additions, no summarizing, no invented text. Set a proper <title>. Output ONLY
+the raw HTML, no code fences." > doc.html
+# local/offline route (free, private): --backend ollama --model gpt-oss:20b --max-tokens 16384
+# (gpt-oss stays resident for the claude-mem observer on the 36GB Mac; the 26b/30b models
+#  can't co-reside with it and pay a 20-60s swap — see SKILL.md fleet-routing residency note.
+#  16384 is REQUIRED: gpt-oss's reasoning channel eats ~75% of the budget — at 8192 a
+#  doc-sized output truncates mid-file [measured 2026-07-12, verdict logged]. ~8 min/doc;
+#  gemini-pro is the primary route, local is the offline fallback.)
+```
+
+**Keep on Claude:** the draft itself; the parity check; saving to the project's home repo.
+
+**Verify (cheap, never re-read your own draft through the fleet):** strip tags and diff word
+sets against the draft (`python3 -c` two-liner or eyeball section count + a few anchor
+phrases); confirm no external URLs in `<link>/<script>/<img>`, `<style>` matches the shell,
+and it opens clean. Then `verdict.py good|bad --tag doc-format`.
+
+**Project design languages:** for repos with a house style (Teletype phosphor, Psychosonic
+Paper Chapel), pass that project's existing CSS block as the shell instead — same recipe.
+
+---
+
 ## The seam, restated
 
 For every one of these: **offload the words, keep the action.** If a step would deploy, commit,

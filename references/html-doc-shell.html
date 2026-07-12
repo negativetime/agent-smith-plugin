@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!-- agent-smith html-doc-shell v1 (2026-07-12) — the LEAN (~1KB CSS) house shell for all
+     info docs (briefs, status, guides, PROJECT.html). Fleet conversion rule: reuse this
+     <style> block VERBATIM, structure content with these classes only, change nothing else.
+     Classes: .wrap .sub .note .card .tiles/.tile(.v/.l) .pill(.done/.next/.warn) td.num -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TITLE HERE</title>
+<style>
+:root{--bg:#f9f9f7;--sf:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--mut:#898781;--ln:#e1e0d9;--bd:rgba(11,11,11,.1);--ac:#2a78d6;--ok:#006300;--okbg:rgba(12,163,12,.1);--wn:#b97900}
+@media(prefers-color-scheme:dark){:root{--bg:#0d0d0d;--sf:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--ln:#2c2c2a;--bd:rgba(255,255,255,.1);--ac:#3987e5;--ok:#0ca30c;--okbg:rgba(12,163,12,.14);--wn:#fab219}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;padding:40px 20px 80px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:25px;letter-spacing:-.02em}
+h2{font-size:17px;margin:34px 0 6px}
+.sub,.note{color:var(--ink2);font-size:13.5px;margin:6px 0 12px}
+p,ul,ol{margin:8px 0}ul,ol{padding-left:20px}li{margin:4px 0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:10px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:14px 0}
+.tile{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:12px 14px}
+.tile .v{font-size:24px;font-weight:700}.tile .l{font-size:12.5px;color:var(--ink2)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}
+th{text-align:left;color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px 6px 0;border-bottom:1px solid var(--ln)}
+td{padding:7px 10px 7px 0;border-bottom:1px solid var(--ln);vertical-align:top}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+code,pre{font:12.5px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--ln);border-radius:6px}
+code{padding:1px 5px}pre{padding:12px 14px;overflow-x:auto;margin:10px 0}pre code{background:none;border:none;padding:0}
+a{color:var(--ac)}
+.pill{font-size:11px;font-weight:700;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.pill.done{background:var(--okbg);color:var(--ok)}.pill.next{color:var(--ac);border:1px solid var(--ac)}.pill.warn{color:var(--wn);border:1px solid var(--wn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<!-- CONTENT HERE: h1 + .sub header, then h2 sections; use .card for callouts/config,
+     .tiles for headline numbers, tables for data, .pill for statuses. -->
+</div>
+</body>
+</html>
