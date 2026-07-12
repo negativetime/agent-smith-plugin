@@ -118,12 +118,14 @@ check) · `--list-models`. API internals: [references/gemini-api.md](references/
 - **Vision + design:** `gemma4:26b` (17 GB) — auto-picked when images present. Design-crown
   holder (discipline: claims match code). **Vision rule: tile tall scrolling captures —
   small text on full-page images gets confidently invented.**
-- **Vision pre-screen (NEW 2026-07-12):** `qwen3-vl:4b` (3.3 GB dl, ~8 GB loaded, 256k ctx) —
-  small enough to co-reside with gpt-oss:20b. Gate run 1: **9/9** on a verified screenshot
-  corpus incl. tiny-text OCR (SC editor dropdown + Key field) with no hallucination on
-  UI-truncated text. Use for "which screen is this / did the dialog open / read this field"
-  QA loops: `--backend ollama --model qwen3-vl:4b --file shot.png`. One more clean gate run
-  (fresh screenshots) earns TRUSTED per the 2-consecutive rule; gemma4:26b keeps the
+- **Vision pre-screen — TRUSTED (2026-07-12, 2-consecutive gate):** `qwen3-vl:4b` (3.3 GB
+  dl, ~8 GB loaded, 256k ctx) — co-resides with gpt-oss:20b. Run 1: **9/9** (incl. tiny-text
+  OCR on a dense SC editor); run 2: **8/9 on fresh corpus incl. a TALL 5265px scroll** where
+  it read even small-text prices correctly (no gemma4-style invention). The one miss —
+  dropped a leading digit in a 10-digit app ID on a full-window shot — read EXACTLY on a
+  field crop. **Lane rule: for exact long digit strings (IDs, serials, keys), crop the field
+  first or double-read.** Use for "which screen / did the dialog open / read this field":
+  `--backend ollama --model qwen3-vl:4b --file shot.png`. gemma4:26b keeps the
   quality/design crown.
 - **Fast bulk drafts:** `qwen3-coder:30b` (18 GB) — ollama default; 2–8s one-shots.
 - **Long private digests — NEW LANE (validated 2026-07-12):** `gpt-oss:20b` at up to

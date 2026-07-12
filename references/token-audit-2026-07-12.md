@@ -103,9 +103,12 @@ qwen2.5-coder-smith:14b 32k (architectural ceiling) · llama3.2:3b 131k.
 ~7.9 GB loaded). Gate run 1: **9/9** on a verified 3-screenshot corpus (Bibliome home +
 tools, dense SoundCheck editor) — badges, sidebar lists, pipeline arrows, and tiny-text OCR
 (sequence dropdown, Key field) all exact; UI-truncated text reported as-visible, not
-invented. Verdict logged good @ vision-prescreen. **Run 2 on fresh screenshots still needed
-for TRUSTED** (2-consecutive gym rule). Alternates if it ever regresses: `qwen3-vl:8b`
-(6.1 GB), `minicpm-v4.6` (1.6 GB).
+invented. Verdict logged good @ vision-prescreen. **Run 2 (same day, fresh corpus): 8/9 —
+PROMOTED TRUSTED** for the pre-screen lane. Notably read small-text prices correctly on a
+TALL 5265px scroll (the shape where gemma4 invents text). Sole miss: dropped the leading
+digit of a 10-digit app ID on a full-window shot; field-crop retest read it exactly →
+lane rule: crop long digit strings (IDs/serials/keys) or double-read. Alternates if it
+ever regresses: `qwen3-vl:8b` (6.1 GB), `minicpm-v4.6` (1.6 GB).
 
 Ollama runtime state: `OLLAMA_MAX_LOADED_MODELS=2` set (launchctl + a LaunchAgent that
 persists it at login). `OLLAMA_KEEP_ALIVE=30m` set for the CURRENT session only — extending
@@ -115,9 +118,9 @@ every observer call) cleared after the app restart; true 2-model simultaneous re
 under memory pressure is NOT yet verified — gpt-oss was still evicted in the one dual-load
 test. Watch `ollama ps`.
 
-**Remaining candidate: qwen2.5-coder-smith:14b is the weakest slot** — hard 32k ctx
-ceiling, borderline agentic (3/5), 9 GB disk; superseded by gpt-oss:20b for every lane
-except consensus diversity. USER-GATED (custom fine-tune): retire only on explicit request.
+**qwen2.5-coder-smith:14b: USER DECIDED KEEP (2026-07-12)** — it's their custom gym-gated
+fine-tune. Stays in the fleet as consensus/witness diversity voice. Do NOT re-propose
+retirement.
 
 **NOT fillable locally (stay cloud/Claude):** web-grounded research (needs --search),
 DESIGN synthesis (gym: gemini-pro is the measured ceiling), correctness-critical/security/
