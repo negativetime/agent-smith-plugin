@@ -54,6 +54,11 @@ def api_key():
     return k
 
 
+# chat-generation HTTP ceiling; local thinking models (qwen3.6) can exceed 600s on
+# one-shots — the gym raises this via env for scout runs
+GEN_HTTP_TIMEOUT = int(os.environ.get("SMITH_GEN_TIMEOUT", "600"))
+
+
 def http(url, method="GET", data=None, headers=None, timeout=300):
     req = urllib.request.Request(url, method=method, data=data, headers=headers or {})
     return urllib.request.urlopen(req, timeout=timeout)
@@ -263,7 +268,7 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
                                  data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as r:
+        with urllib.request.urlopen(req, timeout=GEN_HTTP_TIMEOUT) as r:
             resp = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         msg = e.read().decode("utf-8", "replace")
