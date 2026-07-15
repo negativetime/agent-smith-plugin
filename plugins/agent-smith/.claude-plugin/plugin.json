@@ -1,7 +1,7 @@
 {
   "name": "agent-smith",
   "description": "Offload bulky or research-heavy text + first-draft code to Google Gemini (cloud API or OAuth-subscription CLI), local Ollama, or Apple Foundation Models, then verify and finish with Claude to spare Claude's tokens. Includes a sandboxed agentic tool-loop (smith_agent.py, ollama/gemini/openai backends), LOCAL VISION (screenshot triage via --file on ollama), --batch mode (many files, one prompt, zero per-item orchestration), a usage ledger with a verified-good/bad quality loop, hebbian routing weights (task-shape x model quality + streak-based review tiers), and consensus batch mode (two models vote, disagreement auto-escalates), and a disk-aware local-model installer.",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "author": {
     "name": "negativetime"
   },
