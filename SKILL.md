@@ -200,7 +200,8 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   and continues the SAME session via the JSON-fallback protocol instead of dying.
 - **Ollama-down failover:** the whole local fleet also runs through any OpenAI-compatible
   server via `--backend openai --base-url` (llama-server, `mlx_lm server` — proven, LM
-  Studio). Ollama is the hub, not a dependency.
+  Studio). Ollama is the hub, not a dependency. LM Studio pilot (install, CLI, perf vs
+  Ollama, a real tool-loop bug found + fixed): [references/lmstudio-pilot-2026-07-15.md](references/lmstudio-pilot-2026-07-15.md).
 - **Witness drift sensor (trust has a forgetting curve):** local runs are silently re-run
   on `SMITH_WITNESS_MODEL` (default gpt-oss:20b) on an FSRS-style schedule — the interval
   grows with each consecutive agreement (every 4 runs -> 8 -> 16 ... cap 256) and COLLAPSES
