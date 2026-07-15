@@ -15,7 +15,11 @@ Usage:
         [--transcript /path/to/transcript.jsonl]
 
 Prints a one-line JSON summary to stdout at the end:
-    {"finished": bool, "turns": int, "seconds": float, "stop": "finish|no_tools|max_turns|error"}
+    {"finished": bool, "turns": int, "seconds": float,
+     "stop": "finish|no_tools|finish_no_write|no_tools_no_write|max_turns|error"}
+`finished` is only true if a write_file actually succeeded this session — a
+finish/no_tools stop with zero writes is downgraded to *_no_write and NOT counted
+as finished (models can talk themselves into "done" without changing anything).
 """
 import argparse
 import json
@@ -348,21 +352,35 @@ def chat_gemini(model, contents, system):
     raise last_exc
 
 
-def chat_openai(model, messages, base_url):
-    """OpenAI-compatible chat (e.g. mlx_lm server). Plain text — no tool schemas;
-    the model must speak the JSON-fallback protocol from training/nudging."""
-    clean = [{"role": m["role"], "content": m.get("content", "")}
-             for m in messages if m.get("role") in ("system", "user", "assistant")]
+def chat_openai(model, messages, base_url, tools=True):
+    """OpenAI-compatible chat (e.g. mlx_lm server, LM Studio). Sends native tool
+    schemas like the ollama backend when `tools`; the JSON-fallback protocol
+    (parse_fallback_calls/NUDGE) still applies underneath if the model ignores
+    them and answers in prose instead (e.g. gpt-oss's own channel format)."""
+    clean = []
+    for m in messages:
+        role = m.get("role")
+        if role not in ("system", "user", "assistant", "tool"):
+            continue
+        item = {"role": role, "content": m.get("content", "") or ""}
+        if role == "assistant" and m.get("tool_calls"):
+            item["tool_calls"] = m["tool_calls"]
+        if role == "tool" and m.get("tool_call_id"):
+            item["tool_call_id"] = m["tool_call_id"]
+        clean.append(item)
     payload = {"model": model, "messages": clean, "temperature": 0,
                "max_tokens": MAX_GEN_TOKENS}
+    if tools:
+        payload["tools"] = TOOLS
     req = urllib.request.Request(base_url.rstrip("/") + "/v1/chat/completions",
                                  json.dumps(payload).encode(),
                                  {"Content-Type": "application/json",
                                   "Authorization": "Bearer local"})
     with urllib.request.urlopen(req, timeout=600) as r:
         resp = json.load(r)
-    content = resp["choices"][0]["message"].get("content") or ""
-    return {"role": "assistant", "content": content}
+    msg = resp["choices"][0]["message"]
+    return {"role": "assistant", "content": msg.get("content") or "",
+            "tool_calls": msg.get("tool_calls") or []}
 
 
 def gemini_parts_to_msg(parts):
@@ -442,7 +460,8 @@ def main():
     t0 = time.time()
     finished, stop = False, "max_turns"
     turn, nudged, finish_bounced = 0, False, False
-    native_ok = True  # flips False after an ollama tool-parse 500 -> fallback protocol
+    native_ok = True  # tools= flag; flips False after an ollama tool-parse 500 -> fallback
+    did_write = False  # gates `finished`: a real write_file must succeed this session
     for turn in range(1, args.max_turns + 1):
         try:
             if backend == "gemini":
@@ -450,7 +469,7 @@ def main():
                 contents.append({"role": "model", "parts": parts or [{"text": ""}]})
                 msg = gemini_parts_to_msg(parts)
             elif backend == "openai":
-                msg = chat_openai(args.model, messages, args.base_url)
+                msg = chat_openai(args.model, messages, args.base_url, tools=native_ok)
                 messages.append(msg)
             else:
                 resp = chat(args.model, messages, args.num_ctx, tools=native_ok)
@@ -528,6 +547,8 @@ def main():
             elif name == "write_file":
                 result = t_write_file(workdir, raw_args.get("path", ""),
                                       raw_args.get("content", ""))
+                if result.startswith("OK:"):
+                    did_write = True
             elif name == "run_command":
                 result = t_run_command(workdir, raw_args.get("command", ""))
             else:
@@ -536,6 +557,9 @@ def main():
             if backend == "gemini" and native:
                 tool_parts.append({"functionResponse":
                                    {"name": name, "response": {"result": result}}})
+            elif backend == "openai" and native:
+                messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
+                                 "content": result})
             elif native:
                 messages.append({"role": "tool", "tool_name": name, "content": result})
             else:
@@ -555,7 +579,13 @@ def main():
                       "```json block, or call finish when done and verified. " +
                       WRITE_CONVENTION)
 
-    summary = {"finished": finished or stop == "no_tools", "turns": turn,
+    # A finish (explicit or prose-only give-up) only counts if a write_file actually
+    # landed this session — otherwise it's a false-positive completion (the model
+    # talked, verified nothing, changed nothing). Every real task needs a write.
+    really_finished = (finished or stop == "no_tools") and did_write
+    if not really_finished and stop in ("finish", "no_tools"):
+        stop = f"{stop}_no_write"
+    summary = {"finished": really_finished, "turns": turn,
                "seconds": round(time.time() - t0, 1), "stop": stop}
     log("summary", summary)
     if tlog:
