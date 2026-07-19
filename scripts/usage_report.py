@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Summarize agent-smith delegation activity from data/usage.jsonl.
 
-    python3 usage_report.py            # aggregates + last 10 runs
-    python3 usage_report.py --last 25  # more recent rows
-    python3 usage_report.py --today    # only today's runs
+    python3 usage_report.py              # aggregates + last 10 runs
+    python3 usage_report.py --last 25    # more recent rows
+    python3 usage_report.py --today      # only today's runs
+    python3 usage_report.py --unreviewed # the review queue: runs with no verdict
 """
 import argparse
 import json
@@ -24,6 +25,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--last", type=int, default=10, help="recent rows to show")
     ap.add_argument("--today", action="store_true", help="restrict to today's runs")
+    ap.add_argument("--unreviewed", action="store_true",
+                    help="list only runs with no verdict yet (the review queue)")
     args = ap.parse_args()
 
     if not os.path.isfile(LEDGER):
@@ -78,6 +81,27 @@ def main():
     print("by model:")
     for k, n in by_model.most_common():
         print(f"  {n:4}  {k}")
+
+    # ---- what the fleet is actually being USED FOR -------------------------
+    # Until 2026-07-18 the ledger recorded only size/speed/model, so runs were
+    # indistinguishable after the fact. Records written since carry purpose/tag/
+    # project; older rows show up as "(unlabeled — pre-2026-07-18)".
+    by_tag = Counter(r.get("tag") or "(untagged)" for r in rows)
+    labeled = sum(n for t, n in by_tag.items() if t != "(untagged)")
+    if labeled:
+        print(f"by task shape ({labeled}/{len(rows)} labeled):")
+        for tag, n in by_tag.most_common():
+            if tag == "(untagged)":
+                continue
+            judged = [r for r in rows if (r.get("tag") == tag)
+                      and (verdicts.get(run_key(r)) or {}).get("verdict")]
+            note = f"  ({len(judged)} reviewed)" if judged else ""
+            print(f"  {n:4}  {tag}{note}")
+    by_project = Counter(r.get("project") for r in rows if r.get("project"))
+    if by_project:
+        print("by project:")
+        for proj, n in by_project.most_common(8):
+            print(f"  {n:4}  {proj}")
     routes = {}  # (tag, model) -> [(run_ts, verdict), ...] judged runs only
     for r in all_rows:
         v = verdicts.get(run_key(r))
@@ -126,8 +150,15 @@ def main():
             v = verdicts[run_key(r)]
             print(f"  {r.get('ts','?')[:19]}  {r.get('script')}:{r.get('model')}  "
                   f"— {v.get('note', '(no note)')[:90]}")
-    print(f"\nlast {min(args.last, len(rows))} runs:")
-    for r in rows[-args.last:]:
+    shown = [r for r in rows if not (verdicts.get(run_key(r)) or {}).get("verdict")] \
+        if args.unreviewed else rows
+    if args.unreviewed and not shown:
+        print("\nnothing unreviewed — every run has a verdict.")
+        return
+    heading = "unreviewed runs (oldest first — verdict these)" if args.unreviewed \
+        else f"last {min(args.last, len(shown))} runs"
+    print(f"\n{heading}:")
+    for r in shown[-args.last:]:
         v = verdicts.get(run_key(r))
         mark = {"good": " ✓", "bad": " ✗"}.get((v or {}).get("verdict"), "")
         if r.get("script") == "smith_agent":
@@ -142,7 +173,16 @@ def main():
             desc = (f"{r.get('status')} {r.get('seconds')}s "
                     f"in={r.get('prompt_chars')}ch out={r.get('out_chars')}ch"
                     + (f" ({r.get('images')} img)" if r.get("images") else ""))
+        tag = f"[{r.get('tag')}] " if r.get("tag") else ""
         print(f"  {r.get('ts', '?')[:19]}  {r.get('script')}:{r.get('model')}  {desc}{mark}")
+        purpose = r.get("purpose") or r.get("task")
+        if purpose:
+            files = r.get("files") or r.get("file_names")
+            suffix = f"  <- {', '.join(files)}" if isinstance(files, list) and files else ""
+            print(f"      {tag}{' '.join(str(purpose).split())[:110]}{suffix}")
+    if args.unreviewed:
+        print(f"\n  verdict.py good|bad \"why\" --tag SHAPE --model M   "
+              f"({len(shown)} unreviewed total)")
 
 
 if __name__ == "__main__":

@@ -519,12 +519,34 @@ def call_gemini_cli(prompt, system, temperature, model, preflight=False):
     return answer
 
 
+def _subject(prompt, explicit=None, limit=160):
+    """Derive a human-readable 'what was this for' line for the ledger.
+
+    The ledger used to record only size/speed/model, so 887 runs were
+    indistinguishable after the fact and nothing could be reviewed or routed on
+    purpose (found 2026-07-18). An explicit --purpose wins; otherwise take the
+    first substantive line of the prompt, which in practice reads like a task
+    title. Set SMITH_LOG_PROMPTS=0 to record only explicit purposes.
+    """
+    if explicit:
+        return explicit[:limit]
+    if os.environ.get("SMITH_LOG_PROMPTS", "1") in ("0", "false", "no"):
+        return None
+    for line in (prompt or "").splitlines():
+        line = " ".join(line.split())
+        # Skip fences/markup-only lines that carry no meaning as a title.
+        if len(line) > 12 and not line.startswith(("```", "#", "<", "-", "*", "|")):
+            return line[:limit]
+    return " ".join((prompt or "").split())[:limit] or None
+
+
 def _ledger(rec):
     """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
     Progress tracking only — must never affect the run, so it swallows everything."""
     try:
         import datetime
         rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        rec.setdefault("project", os.path.basename(os.getcwd()) or None)
         path = os.environ.get("SMITH_LEDGER") or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "data", "usage.jsonl")
@@ -682,10 +704,65 @@ def _witness(prompt, system, primary_model, primary_text, images, context):
         pass
 
 
+def _strip_fences(text):
+    """Drop a wrapping markdown code fence. Whether a model wraps its answer in
+    ```python is a formatting habit, not a disagreement."""
+    t = (text or "").strip()
+    m = re.match(r"^```[a-zA-Z0-9_.+-]*[ \t]*\r?\n(.*?)```\s*$", t, re.DOTALL)
+    return m.group(1).strip() if m else t
+
+
+def _py_skeleton(text):
+    """Structural fingerprint of Python source, or None if it isn't parseable.
+
+    Normalizes away the things two models legitimately differ on without either
+    being wrong: formatting, comments, docstrings, and type annotations. What
+    survives is the actual structure — names, control flow, operations.
+    """
+    try:
+        import ast
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return None
+    try:
+        import ast
+        for node in ast.walk(tree):
+            # Type hints are style, not behavior.
+            if isinstance(node, ast.arg):
+                node.annotation = None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                node.returns = None
+            if isinstance(node, ast.AnnAssign):
+                node.annotation = ast.Name(id="_", ctx=ast.Load())
+            # Docstrings are prose; two correct answers word them differently.
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)) and getattr(node, "body", None):
+                first = node.body[0]
+                if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str) and len(node.body) > 1):
+                    node.body = node.body[1:]
+        return ast.dump(tree, annotate_fields=True, include_attributes=False)
+    except Exception:  # noqa: BLE001 — a sensor must never raise
+        return None
+
+
 def _outputs_agree(a, b):
-    """True when two model outputs agree after normalization. Exact-match voting —
-    only meaningful for SHORT structured outputs (classify/extract), not prose."""
-    return _normalize_output(a) == _normalize_output(b)
+    """True when two model outputs agree.
+
+    Exact-match after normalization is right for the SHORT structured outputs
+    this was built for (classify/extract). It is WRONG for code: it was applied
+    to one-shot code generation and reported drift for markdown fences and type
+    hints, so the sensor sat at 18% agreement, every model's trust streak stayed
+    pinned at 0, and the FSRS interval never grew (found 2026-07-18). When both
+    sides are parseable Python, compare structure instead.
+    """
+    a_s, b_s = _strip_fences(a), _strip_fences(b)
+    if _normalize_output(a_s) == _normalize_output(b_s):
+        return True
+    ska, skb = _py_skeleton(a_s), _py_skeleton(b_s)
+    if ska is not None and skb is not None:
+        return ska == skb
+    return False
 
 
 def run_batch(args, prompt):
@@ -815,6 +892,7 @@ def run_batch(args, prompt):
                "failed_count": len(failed), "out_dir": out_dir, "model": model,
                "seconds": round(time.time() - t0, 1)}
     rec = {"script": "gemini", "backend": "ollama", "model": model,
+           "purpose": _subject(prompt, args.purpose), "tag": args.tag,
            "batch": len(items), "ok": ok, "failed_count": len(failed),
            "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
            "seconds": summary["seconds"],
@@ -883,6 +961,12 @@ def main():
                          "(classify/extract) where exact-match voting is meaningful. MODEL2 "
                          "must differ from the primary, and must be a vision model when the "
                          "manifest contains images.")
+    ap.add_argument("--purpose", default=None, metavar="TEXT",
+                    help="One-line 'what this run is for', recorded in the usage ledger. "
+                         "Auto-derived from the prompt when omitted.")
+    ap.add_argument("--tag", default=None, metavar="TASKSHAPE",
+                    help="Task-shape label (research | doc-format | classify | vision ...). "
+                         "Groups the ledger and feeds hebbian routing weights.")
     ap.add_argument("--preflight", action="store_true",
                     help="Treat the output as Python code: syntax-check it (no execution) and, on a "
                          "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
@@ -964,6 +1048,8 @@ def main():
         print(text)
         sys.stdout.flush()
         _ledger({"script": "gemini", "backend": args.backend, "model": model_eff,
+                 "purpose": _subject(prompt, args.purpose), "tag": args.tag,
+                 "files": [os.path.basename(f) for f in args.file] or None,
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "images": len(images) or None,
                  "seconds": round(time.time() - t0, 1), "status": "ok"})
@@ -1030,6 +1116,8 @@ def main():
     log(f"tokens: prompt={u.get('promptTokenCount')} output={u.get('candidatesTokenCount')} "
         f"thoughts={u.get('thoughtsTokenCount', 0)} total={u.get('totalTokenCount')}")
     _ledger({"script": "gemini", "backend": "gemini", "model": model,
+             "purpose": _subject(prompt, args.purpose), "tag": args.tag,
+             "file_names": [os.path.basename(f) for f in args.file] or None,
              "prompt_chars": len(prompt), "out_chars": len(text),
              "tokens_prompt": u.get("promptTokenCount"),
              "tokens_out": u.get("candidatesTokenCount"),

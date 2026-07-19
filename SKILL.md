@@ -105,7 +105,7 @@ check) · `--list-models`. API internals: [references/gemini-api.md](references/
 | backend | runs on | cost | files/web | use when |
 |---|---|---|---|---|
 | `gemini` | Google cloud (API key) | free tier, rate-limited | **yes** | anything substantial; ONLY one with `--file`/`--search` |
-| `gemini-cli` | your OAuth login | subscription quota, no API limit | no | free-tier 429s throttling you (one-time: `gemini` → Login with Google) |
+| `gemini-cli` | your OAuth login | **PAID — user's $20/mo Google AI Pro** | no | THE lane when the free API is slow/429ing (measured 2026-07-12: 3.8s vs 50s+ congested API). Text-only: pipe file contents via stdin. Use what's paid for |
 | `fm` | this Mac (~3B) | free | no | private + simple bulk (`FM_HELPER` path) |
 | `ollama` | this Mac | free, unlimited | images yes | private/offline/high-volume; the FLEET below |
 | `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data — private work stays local** |
@@ -184,7 +184,16 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
 ## Progress tracking — ledger, verdicts, routing weights, witness
 
 - Every run appends one JSON line to `data/usage.jsonl` (fail-safe; `SMITH_LEDGER` overrides).
-  Review: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
+  Review: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`, `--unreviewed`).
+- **Say what a run is FOR (2026-07-18).** The ledger used to record only size/speed/model, so
+  887 runs were indistinguishable after the fact and nothing could be reviewed or routed on
+  purpose. Records now carry `purpose` (auto-derived from the prompt), `tag`, `project`, and
+  input filenames. **Pass `--tag SHAPE` on every delegation** (`research`, `doc-format`,
+  `classify`, `vision`, `copy-draft`, `long-digest`…) — it groups the report and feeds the
+  hebbian routing weights below; add `--purpose "…"` when the first prompt line makes a poor
+  title. `SMITH_LOG_PROMPTS=0` records only explicit purposes. `usage_report.py --unreviewed`
+  is the review queue — coverage was ~4% (799/887 unverdicted), so the routing weights rest on
+  a thin sample; verdict a few whenever you're already in the ledger.
 - **Verdicts:** `ok` = completed, not correct. After review:
   `verdict.py good|bad "why" [--tag TASKTYPE] [--model M] [--script S]`. Tags feed the
   report's **hebbian routing weights**: per (task-shape, model) quality + streak → review
@@ -208,6 +217,13 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   back to 4 on any disagreement or verified-bad verdict. Verification never reaches zero;
   stable routes just earn longer intervals. Disagreement = DRIFT SIGNAL in the report
   (never an auto-verdict). `SMITH_WITNESS_RATE` switches back to flat-rate sampling.
+  **Comparator fixed 2026-07-18:** it was exact-match on raw text, applied to one-shot CODE
+  generation — a markdown fence or a type hint counted as drift, so the sensor sat at 18%
+  agreement, every model's streak stayed pinned at 0, the interval never grew, and the
+  logged DRIFT entries before this date are mostly spurious (ignore them). Now: fences are
+  stripped, and when both outputs parse as Python they're compared as AST skeletons with
+  annotations/docstrings/comments normalized away — so formatting differences agree while
+  a real logic change, a different algorithm, or a differing classification still flags.
 
 ## Troubleshooting
 
