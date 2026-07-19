@@ -66,8 +66,10 @@ Saves ~22.6M out + 2.5B cache-read tokens/mo of subscription quota. Verified liv
 
 1. ~~claude-mem observer~~ → **DONE** (above). −22.6M out/mo.
 2. **Web research & doc digestion in the main loop** (~5–8M out/mo): 679 searches +
-   701 fetches ran on Opus (silvermakersmarks ×110 for Hallmarked, Apple docs ×68,
-   tarot content). Route to `gemini.py --search` / `--file` — research @ gemini-pro is
+   701 fetches ran on Opus at measurement time (silvermakersmarks ×110 for Hallmarked,
+   Apple docs ×68, tarot content) — **since the 2026-07-14 Sonnet-default operating mode,
+   main-loop research now runs on Sonnet by default.** The offload gap is unchanged
+   regardless of tier: route to `gemini.py --search` / `--file` — research @ gemini-pro is
    already at *light review* (streak 6). The gap is habit, not tooling.
 3. **Read-only subagent fan-outs** (~6M of 12.8M sidechain): "search/summarize X"
    general-purpose Agent spawns → `gemini.py` or `--backend ollama --batch`. Keep

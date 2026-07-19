@@ -134,13 +134,19 @@ tokens of markdown, so the styling premium goes to the fleet, not Claude.
   (`references/html-doc-shell.html`, ~1KB CSS, light/dark, stable class set):
 
 ```bash
-python3 "$SKILL/scripts/gemini.py" --model pro \
+python3 "$SKILL/scripts/gemini.py" --model pro --temperature 0 \
   --file /path/to/draft.md --file "$SKILL/references/html-doc-shell.html" \
   "Convert the markdown draft into a complete self-contained HTML document using the attached
 shell: reuse its <style> block VERBATIM and structure the content with its classes (h1+.sub
 header, h2 sections, .card, .tiles, tables with td.num, .pill). Preserve ALL draft content
 exactly — no additions, no summarizing, no invented text. Set a proper <title>. Output ONLY
 the raw HTML, no code fences." > doc.html
+# --temperature 0 is REQUIRED: at default temp gpt-oss dropped whole sentences and
+# compressed explanations despite the preserve-exactly instruction (verdict 2026-07-12).
+# API congested/429? Use the PAID subscription lane FIRST (before local):
+#   cat draft.md "$SKILL/references/html-doc-shell.html" | \
+#     python3 "$SKILL/scripts/gemini.py" --backend gemini-cli --model pro --temperature 0 "Convert..." > doc.html
+# (gemini-cli has no --file; stdin carries the payload. 2026-07-12: 3.8s when API took 50s+.)
 # local/offline route (free, private): --backend ollama --model gpt-oss:20b --max-tokens 16384
 # (gpt-oss stays resident for the claude-mem observer on the 36GB Mac; the 26b/30b models
 #  can't co-reside with it and pay a 20-60s swap — see SKILL.md fleet-routing residency note.
@@ -148,6 +154,18 @@ the raw HTML, no code fences." > doc.html
 #  doc-sized output truncates mid-file [measured 2026-07-12, verdict logged]. ~8 min/doc;
 #  gemini-pro is the primary route, local is the offline fallback.)
 ```
+
+**temp 0 is necessary but NOT sufficient — prefer gemma4:26b or qwen3-coder:30b locally.**
+The agent-gym `doc_fidelity_html_long` task (added 2026-07-18) runs at `--temperature 0` and
+gpt-oss:20b still silently rewrote a heading, `Balancer` → `Baler`, while keeping
+`BalancerUnit` correct in the body of the same section — the same shape as the
+`TarotCore` → `TatartCore` production failure. Temp 0 stopped the sentence-dropping; it did
+not stop proper-noun corruption. On that task **gemma4:26b and qwen3-coder:30b both passed
+and gpt-oss:20b failed**, and the ledger agrees (doc tags: gpt-oss:20b 1 good / 3 bad,
+gemini-pro 2 good / 0 bad, flash 1 good / 0 bad). So: cloud `pro` stays the primary route,
+and the local fallback should be **gemma4:26b or qwen3-coder:30b, not gpt-oss:20b**. Whatever
+the route, diff proper nouns and figures against the draft before shipping — this failure is
+specifically designed to survive a skim.
 
 **Keep on Claude:** the draft itself; the parity check; saving to the project's home repo.
 
