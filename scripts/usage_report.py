@@ -27,6 +27,9 @@ def main():
     ap.add_argument("--today", action="store_true", help="restrict to today's runs")
     ap.add_argument("--unreviewed", action="store_true",
                     help="list only runs with no verdict yet (the review queue)")
+    ap.add_argument("--include-legacy", action="store_true",
+                    help="with --unreviewed, also show pre-2026-07-18 rows that have no "
+                         "recorded purpose (nothing to judge them against)")
     args = ap.parse_args()
 
     if not os.path.isfile(LEDGER):
@@ -150,10 +153,25 @@ def main():
             v = verdicts[run_key(r)]
             print(f"  {r.get('ts','?')[:19]}  {r.get('script')}:{r.get('model')}  "
                   f"— {v.get('note', '(no note)')[:90]}")
-    shown = [r for r in rows if not (verdicts.get(run_key(r)) or {}).get("verdict")] \
-        if args.unreviewed else rows
+    legacy_hidden = 0
+    if args.unreviewed:
+        shown = [r for r in rows if not (verdicts.get(run_key(r)) or {}).get("verdict")]
+        # Rows written before the 2026-07-18 purpose field carry no subject line, so
+        # they can't be judged after the fact — the prompt was never stored and there
+        # is nothing to reconstruct it from. Showing 800 of them buries the handful
+        # that ARE actionable, so they're counted and skipped unless asked for.
+        if not args.include_legacy:
+            identifiable = [r for r in shown
+                            if r.get("purpose") or r.get("task") or r.get("tag")]
+            legacy_hidden = len(shown) - len(identifiable)
+            shown = identifiable
+    else:
+        shown = rows
     if args.unreviewed and not shown:
-        print("\nnothing unreviewed — every run has a verdict.")
+        print("\nnothing unreviewed with a recorded purpose."
+              + (f" ({legacy_hidden} pre-2026-07-18 rows have no subject line and "
+                 f"can't be reconstructed; --include-legacy to list them.)"
+                 if legacy_hidden else " Every run has a verdict."))
         return
     heading = "unreviewed runs (oldest first — verdict these)" if args.unreviewed \
         else f"last {min(args.last, len(shown))} runs"
@@ -182,7 +200,11 @@ def main():
             print(f"      {tag}{' '.join(str(purpose).split())[:110]}{suffix}")
     if args.unreviewed:
         print(f"\n  verdict.py good|bad \"why\" --tag SHAPE --model M   "
-              f"({len(shown)} unreviewed total)")
+              f"({len(shown)} actionable)")
+        if legacy_hidden:
+            print(f"  {legacy_hidden} older rows hidden: written before purposes were "
+                  f"logged (2026-07-18), so there's nothing to review them against. "
+                  f"--include-legacy lists them anyway.")
 
 
 if __name__ == "__main__":
