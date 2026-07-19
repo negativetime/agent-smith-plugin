@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<!-- agent-smith html-doc-shell v1 (2026-07-12) — the LEAN (~1KB CSS) house shell for all
+     info docs (briefs, status, guides, PROJECT.html). Fleet conversion rule: reuse this
+     <style> block VERBATIM, structure content with these classes only, change nothing else.
+     Classes: .wrap .sub .note .card .tiles/.tile(.v/.l) .pill(.done/.next/.warn) td.num -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-smith — Gemini + local-fleet offload skill</title>
+<style>
+:root{--bg:#f9f9f7;--sf:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--mut:#898781;--ln:#e1e0d9;--bd:rgba(11,11,11,.1);--ac:#2a78d6;--ok:#006300;--okbg:rgba(12,163,12,.1);--wn:#b97900}
+@media(prefers-color-scheme:dark){:root{--bg:#0d0d0d;--sf:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--ln:#2c2c2a;--bd:rgba(255,255,255,.1);--ac:#3987e5;--ok:#0ca30c;--okbg:rgba(12,163,12,.14);--wn:#fab219}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;padding:40px 20px 80px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:25px;letter-spacing:-.02em}
+h2{font-size:17px;margin:34px 0 6px}
+.sub,.note{color:var(--ink2);font-size:13.5px;margin:6px 0 12px}
+p,ul,ol{margin:8px 0}ul,ol{padding-left:20px}li{margin:4px 0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:10px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:14px 0}
+.tile{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:12px 14px}
+.tile .v{font-size:24px;font-weight:700}.tile .l{font-size:12.5px;color:var(--ink2)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}
+th{text-align:left;color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px 6px 0;border-bottom:1px solid var(--ln)}
+td{padding:7px 10px 7px 0;border-bottom:1px solid var(--ln);vertical-align:top}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+code,pre{font:12.5px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--ln);border-radius:6px}
+code{padding:1px 5px}pre{padding:12px 14px;overflow-x:auto;margin:10px 0}pre code{background:none;border:none;padding:0}
+a{color:var(--ac)}
+.pill{font-size:11px;font-weight:700;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.pill.done{background:var(--okbg);color:var(--ok)}.pill.next{color:var(--ac);border:1px solid var(--ac)}.pill.warn{color:var(--wn);border:1px solid var(--wn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<!-- CONTENT HERE: h1 + .sub header, then h2 sections; use .card for callouts/config,
+     .tiles for headline numbers, tables for data, .pill for statuses. -->
+<h1>agent-smith — Gemini + local-fleet offload skill</h1>
+<p class="sub"><code>/Users/joshualangberg/Python/agent-smith</code> (symlinked to <code>~/.claude/skills/agent-smith</code>) &middot; pure-stdlib Python &middot; local git repo, NO REMOTE (commits live only on this Mac) &middot; public plugin is separate: <code>negativetime/agent-smith-plugin</code></p>
+
+<h2>1 · What & where</h2>
+<p>The offload skill: Claude scopes and verifies, Gemini and the local Ollama fleet do the bulk. Spends fleet tokens instead of Claude's, per the standing quota-economy preference. Trust tiers are earned in agent-gym, never asserted.</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Skill entry</td>
+<td><code>SKILL.md</code> — routing, backends, fleet tiers, the delegation loop</td>
+</tr>
+<tr>
+<td>Main helper</td>
+<td><code>scripts/gemini.py</code> — answer on stdout, meta on stderr; backends <code>gemini</code>, <code>gemini-cli</code>, <code>fm</code>, <code>ollama</code>, <code>openai</code></td>
+</tr>
+<tr>
+<td>Agentic loop</td>
+<td><code>scripts/smith_agent.py</code> — sandboxed tool loop for multi-step scratch builds</td>
+</tr>
+<tr>
+<td>Transcription</td>
+<td><code>scripts/transcribe.py</code> — mlx-whisper, local, free</td>
+</tr>
+<tr>
+<td>Ledger review</td>
+<td><code>scripts/usage_report.py</code> — aggregates, routing weights, <code>--unreviewed</code> queue</td>
+</tr>
+<tr>
+<td>Verdicts</td>
+<td><code>scripts/verdict.py good|bad "why" --tag SHAPE --model M</code></td>
+</tr>
+<tr>
+<td>Gap finder</td>
+<td><code>scripts/gap_report.py</code> — where the fleet is UNUSED or MISROUTED</td>
+</tr>
+<tr>
+<td>Fleet identity</td>
+<td><code>scripts/fleet_check.py</code> — digests vs accepted baseline</td>
+</tr>
+<tr>
+<td>Ledger data</td>
+<td><code>data/usage.jsonl</code> (untracked; <code>SMITH_LEDGER</code> overrides)</td>
+</tr>
+<tr>
+<td>House doc shell</td>
+<td><code>references/html-doc-shell.html</code> — ~1KB CSS, reuse VERBATIM</td>
+</tr>
+<tr>
+<td>Playbooks</td>
+<td><code>references/playbooks.md</code> &middot; token audit: <code>references/token-audit-2026-07-12.md</code></td>
+</tr>
+<tr>
+<td>Gym (earns the tiers)</td>
+<td><code>/Users/joshualangberg/Python/agent-gym</code></td>
+</tr>
+</tbody>
+</table>
+
+<h2>2 · The delegation loop (standing practice, 2026-07-19)</h2>
+<p>Close the loop on every delegation or the fleet silently stops improving. Also recorded in global <code>~/.claude/CLAUDE.md</code>.</p>
+<ol>
+<li><strong>Tag every call</strong> — <code>--tag SHAPE</code> (<code>research</code>, <code>doc-format</code>, <code>classify</code>, <code>vision-prescreen</code>, <code>long-digest</code>, <code>copy-draft</code>), plus <code>--purpose "..."</code> when the first prompt line is a poor title. Untagged runs are invisible to the gap report.</li>
+<li><strong>Verdict after review</strong> — <code>verdict.py good|bad "why" --tag SHAPE --model M</code>. Feeds hebbian routing weights: streak 5 = light review, 10 = spot-check. One bad resets it.</li>
+<li><strong>Find gaps</strong> — <code>gap_report.py</code> monthly, on gym day, or when quota is tight. <code>--refresh</code> re-mines transcripts.</li>
+<li><strong>Every bad verdict becomes an agent-gym task</strong> before that shape is delegated again.</li>
+</ol>
+
+<h2>3 · Current status</h2>
+<table>
+<thead>
+<tr>
+<th>Piece</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ledger purpose logging</td>
+<td><span class="pill done">SHIPPED</span> 2026-07-18 — <code>purpose</code>, <code>tag</code>, <code>project</code>, filenames on every record</td>
+</tr>
+<tr>
+<td>Review queue</td>
+<td><span class="pill done">SHIPPED</span> — <code>usage_report.py --unreviewed</code>, 806 unusable rows down to 13 actionable</td>
+</tr>
+<tr>
+<td>Gap report</td>
+<td><span class="pill done">SHIPPED</span> 2026-07-19 — joins ledger against <code>token_audit.json</code></td>
+</tr>
+<tr>
+<td>Witness comparator</td>
+<td><span class="pill done">FIXED</span> 2026-07-19 — was exact-match on code</td>
+</tr>
+<tr>
+<td>doc-format routing</td>
+<td><span class="pill done">CORRECTED</span> 2026-07-19 — gpt-oss:20b off this lane</td>
+</tr>
+<tr>
+<td>Verdict coverage</td>
+<td>33 good / 7 bad reviewed, ~800 legacy unreviewable</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Measured 2026-07-19: web research is 2% delegated</strong> — 1,467 Claude calls vs 24 fleet runs, while <code>research @ gemini-pro</code> already holds a 6-good streak at light-review trust. Read-only subagent fan-out is 0% of 663 Agent spawns. The blocker is habit, not tooling. This corroborates the 2026-07-12 audit's independently measured 0.2% overall offload ratio.</p>
+
+<h2>4 · Fleet routing (gym-earned)</h2>
+<table>
+<thead>
+<tr>
+<th>Lane</th>
+<th>Model</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Quality code / app builds</td>
+<td><code>gpt-oss:20b</code> (12 GB)</td>
+<td><span class="pill done">TRUSTED</span> code-gen/struct/edit/app-build. Watch reasoning residue. <span class="pill warn">NOT for doc-format</span></td>
+</tr>
+<tr>
+<td>Vision + design</td>
+<td><code>gemma4:26b</code> (17 GB)</td>
+<td>Design crown. Tile tall captures</td>
+</tr>
+<tr>
+<td>Vision pre-screen</td>
+<td><code>qwen3-vl:4b</code> (3.3 GB)</td>
+<td><span class="pill done">TRUSTED</span>. Crop long digit strings or double-read</td>
+</tr>
+<tr>
+<td>Fast bulk drafts</td>
+<td><code>qwen3-coder:30b</code> (18 GB)</td>
+<td>2-8s one-shots</td>
+</tr>
+<tr>
+<td>Long private digests</td>
+<td><code>gpt-oss:20b</code> at 131k ctx</td>
+<td>RAM flat at 12 GB, MXFP4 MoE</td>
+</tr>
+<tr>
+<td>Doc conversion</td>
+<td><code>gemini-pro</code> primary; <code>gemma4:26b</code> or <code>qwen3-coder:30b</code> local</td>
+<td><span class="pill warn">NOT gpt-oss:20b</span></td>
+</tr>
+<tr>
+<td>Lighter backup</td>
+<td><code>qwen2.5-coder-smith:14b</code> (9 GB)</td>
+<td>Own LoRA. User decided KEEP</td>
+</tr>
+</tbody>
+</table>
+<p class="note"><strong>Residency, 36 GB Mac:</strong> the claude-mem observer keeps <code>gpt-oss:20b</code> hot; it and <code>qwen3-coder:30b</code> cannot co-reside. Prefer gpt-oss:20b for routine drafts; reaching for the bigger models costs a 20-60s swap.</p>
+
+<h2>5 · Key decisions & constraints</h2>
+<ul>
+<li><strong>The model drafts, Claude verifies.</strong> Every winner has shipped a bug a review caught.</li>
+<li><strong>Offload the words, keep the action.</strong> Nothing that deploys, commits, posts, or charges — backends hold no credentials.</li>
+<li><strong>Free clouds may train on your data.</strong> Private work stays local. Bibliome and SC Helper ship offline-only.</li>
+<li><strong>temp 0 is necessary but NOT sufficient for doc conversion.</strong> It stopped sentence-dropping; it did not stop proper-noun corruption.</li>
+<li><strong>Trust has a forgetting curve.</strong> The witness re-runs local calls on a schedule that grows with agreement and collapses on disagreement.</li>
+<li><strong><code>ollama pull</code> updates weights in place</strong> — a trusted model can silently become a different one. Run <code>fleet_check.py</code> after any pull.</li>
+</ul>
+
+<h2>6 · Gotchas & lessons</h2>
+<ul>
+<li><strong>The ledger is blind to what was never delegated.</strong> It only sees delegated work, so gaps live in the Claude transcripts. That is what <code>gap_report.py</code> joins; neither dataset shows a gap alone.</li>
+<li><strong>Exact-match is wrong for code.</strong> The witness compared raw text on one-shot code generation, so a markdown fence or a type hint read as drift: 18% agreement, every streak pinned at 0, the interval never grew. DRIFT entries before 2026-07-19 are mostly spurious. Now compares Python as AST skeletons with annotations, docstrings and comments normalized away.</li>
+<li><strong>gpt-oss:20b silently corrupts proper nouns in long docs.</strong> Reproduced on demand in agent-gym: it wrote <code>Baler</code> for <code>Balancer</code> while keeping <code>BalancerUnit</code> correct in the same section's body — the same shape as the production <code>TarotCore</code> to <code>TatartCore</code> failure. Diff proper nouns and figures against the draft before shipping any converted doc.</li>
+<li><strong>A doc-fidelity test only discriminates when required output approaches the token cap.</strong> A 22-section doc demanded ~1.4-2.1k tokens against a 4000 cap and every model passed. At 54 sections (~3.3k) gpt-oss:20b failed immediately.</li>
+<li><strong>gpt-oss reasoning eats ~75% of the budget</strong> — local doc conversion needs <code>--max-tokens 16384</code>; at 8192 a doc-sized output truncates mid-file.</li>
+<li><strong><code>gemini-cli</code> has no <code>--file</code></strong> — pipe file contents via stdin. It is the PAID subscription lane: use it first when the free API is congested (3.8s vs 50s+ measured).</li>
+<li><strong>Ollama wedge mode:</strong> repeated client aborts leave a model stuck "Stopping...". Recovery: kill the <code>llama-server</code> runner PID, or restart Ollama.app.</li>
+<li><strong>Tags only exist from 2026-07-18.</strong> Older history is recovered by per-shape heuristics, so every gap ratio reads as a floor.</li>
+</ul>
+
+<h2>7 · Run / review</h2>
+<pre><code>SKILL=~/.claude/skills/agent-smith
+
+# a tagged delegation (ALWAYS tag)
+python3 "$SKILL/scripts/gemini.py" --search --tag research "What changed in X?"
+
+# review + verdict
+python3 "$SKILL/scripts/usage_report.py" --unreviewed
+python3 "$SKILL/scripts/verdict.py" good "why" --tag research --model gemini-pro-latest
+
+# where is the fleet NOT being used
+python3 "$SKILL/scripts/gap_report.py"            # --refresh re-mines transcripts
+
+# fleet identity after any ollama pull
+python3 "$SKILL/scripts/fleet_check.py"</code></pre>
+
+<h2>8 · Open items</h2>
+<ul>
+<li><strong>No git remote.</strong> Commits live only on this Mac. Add a remote if they should be backed up.</li>
+<li><strong>~800 legacy ledger rows are unreviewable</strong> — they predate purpose logging and cannot be reconstructed. Going-forward fix only.</li>
+<li><strong>Verdict discipline is the live risk.</strong> Routing weights rest on 40 reviewed runs out of 842.</li>
+<li><strong>Witness drift entries before 2026-07-19 should be ignored</strong> — spurious, from the old comparator.</li>
+<li><strong>Subagent fan-out has no verdicts yet</strong> — 0 of 663 Agent spawns delegated, so the shape has no measured trust.</li>
+</ul>
+</div>
+</body>
+</html>
