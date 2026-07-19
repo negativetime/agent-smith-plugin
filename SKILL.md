@@ -200,6 +200,17 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
 - **Feed failures back:** every `bad` = a ready-made regression test → new agent-gym task
   before that shape is delegated again.
+- **Find the gaps — `python3 "$SKILL/scripts/gap_report.py"`.** The ledger only sees work that
+  WAS delegated; it is structurally blind to work Claude did itself, which is where the gaps
+  are. This joins the ledger against `token_audit.json` (mined from Claude transcripts) and
+  splits the result two ways: **UNUSED** (Claude did it while a trusted route sat idle) and
+  **MISROUTED** (delegated to a model the ledger scores badly at that shape). Standing
+  measurement 2026-07-19: **web research 2% delegated** — 1,467 Claude calls vs 24 fleet runs
+  while `research @ gemini-pro` holds a 6-good streak at light review; read-only subagent
+  fan-out 0% of 663 Agent spawns. Run it monthly, on gym day, or whenever quota gets tight;
+  `--refresh` re-mines the transcripts first. Caveat it prints itself: tags only exist on runs
+  since 2026-07-18, so pre-tag history is recovered by per-shape heuristics and ratios read as
+  a floor.
 - **Fleet identity check:** `ollama pull` updates weights IN PLACE — a trusted model can
   silently become a different model. `python3 "$SKILL/scripts/fleet_check.py"` compares
   current digests vs the accepted baseline (`--accept` after a deliberate update + re-gate);
