@@ -215,6 +215,14 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   silently become a different model. `python3 "$SKILL/scripts/fleet_check.py"` compares
   current digests vs the accepted baseline (`--accept` after a deliberate update + re-gate);
   run it when anything smells off, and always after pulling updates.
+- **Witness comparison is STRUCTURAL, not textual.** Python uses the stdlib `ast`; other
+  languages use tree-sitter when installed — `pip install tree-sitter tree-sitter-language-pack`
+  (OPTIONAL: absent, non-Python falls back to exact-match, the pre-2026-07-20 behaviour, and
+  nothing raises). Without it the sensor could not tell benign formatting from real drift in
+  Swift/TS/YAML — spacing, semicolons and comments all read as disagreement, which is what
+  pinned it at 18% agreement. Operators and keywords are kept in the fingerprint (they are
+  anonymous tree-sitter nodes and were briefly dropped, making `a + b` equal `a - b`);
+  delimiters are excluded.
 - **Self-healing tool calls:** if Ollama's server-side tool parser 500s mid-session
   (truncated/complex calls — the known killer), smith_agent now drops native tool schemas
   and continues the SAME session via the JSON-fallback protocol instead of dying.

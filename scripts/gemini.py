@@ -707,9 +707,106 @@ def _witness(prompt, system, primary_model, primary_text, images, context):
 def _strip_fences(text):
     """Drop a wrapping markdown code fence. Whether a model wraps its answer in
     ```python is a formatting habit, not a disagreement."""
+    return _split_fence(text)[0]
+
+
+def _split_fence(text):
+    """(body, language_tag_or_None). The fence's tag is the most reliable
+    language signal available, so it is captured rather than discarded."""
     t = (text or "").strip()
-    m = re.match(r"^```[a-zA-Z0-9_.+-]*[ \t]*\r?\n(.*?)```\s*$", t, re.DOTALL)
-    return m.group(1).strip() if m else t
+    m = re.match(r"^```([a-zA-Z0-9_.+-]*)[ \t]*\r?\n(.*?)```\s*$", t, re.DOTALL)
+    if not m:
+        return t, None
+    return m.group(2).strip(), (m.group(1).strip().lower() or None)
+
+
+# Fence tag -> tree-sitter grammar name. Only the languages this fleet actually
+# drafts; the pack ships 306, but guessing beyond what we use buys nothing.
+_TS_LANGS = {
+    "swift": "swift", "js": "javascript", "javascript": "javascript",
+    "jsx": "javascript", "ts": "typescript", "typescript": "typescript",
+    "tsx": "tsx", "go": "go", "rust": "rust", "rs": "rust", "java": "java",
+    "c": "c", "cpp": "cpp", "c++": "cpp", "objc": "objc", "kotlin": "kotlin",
+    "ruby": "ruby", "rb": "ruby", "php": "php", "bash": "bash", "sh": "bash",
+    "zsh": "bash", "html": "html", "css": "css", "json": "json",
+    "yaml": "yaml", "yml": "yaml", "toml": "toml", "sql": "sql",
+    "dockerfile": "dockerfile", "lua": "lua", "scala": "scala",
+}
+# Tried in order when there is no fence tag. Deliberately short: each attempt
+# is a full parse, and a wrong-language parse must be REJECTED (below), not
+# silently accepted.
+_TS_SNIFF = ("swift", "typescript", "javascript", "go", "rust", "json", "yaml")
+
+# Delimiters carrying no meaning beyond what the tree shape already encodes.
+# Everything else anonymous (operators, keywords) IS meaning and is kept.
+_TS_PUNCT = frozenset({";", ",", "{", "}", "(", ")", "[", "]", ":", "\n"})
+
+
+def _ts_skeleton(text, lang_tag=None):
+    """Structural fingerprint of NON-Python source via tree-sitter, or None.
+
+    Python has a stdlib AST and needs no dependency, so it is handled by
+    _py_skeleton. Everything else previously fell through to exact-match, which
+    is the bug that pinned the witness at 18% agreement — a reformatted Swift
+    draft or a moved JS semicolon read as drift. The fleet drafts Swift,
+    TypeScript, YAML and Dockerfiles routinely, so that fallback covered real
+    traffic (found 2026-07-20).
+
+    tree-sitter is OPTIONAL. agent-smith's zero-dependency guarantee holds: if
+    the packages are absent this returns None and behaviour is exactly what it
+    was. Enable with:  pip install tree-sitter tree-sitter-language-pack
+    """
+    if not (text or "").strip():
+        return None
+    try:
+        from tree_sitter_language_pack import get_parser
+    except Exception:  # noqa: BLE001 — absent/broken dep must never matter
+        return None
+
+    names = ([_TS_LANGS[lang_tag]] if lang_tag and lang_tag in _TS_LANGS
+             else list(_TS_SNIFF))
+    src = text.encode("utf-8", "replace")
+    for name in names:
+        try:
+            tree = get_parser(name).parse(src)
+        except Exception:  # noqa: BLE001 — grammar missing for this language
+            continue
+        # tree-sitter is ERROR-TOLERANT: it returns a tree for nonsense input
+        # rather than raising. Without this check two unrelated blobs could
+        # both "parse" and compare structurally similar, so a tree carrying any
+        # error is treated as not-this-language.
+        if tree.root_node.has_error:
+            continue
+        out = []
+
+        def walk(node):
+            t = node.type
+            if "comment" in t:  # prose, not structure
+                return
+            if node.child_count == 0:
+                # Leaf: keep its text so renamed identifiers still count as drift.
+                out.append(f"{t}:{node.text.decode('utf-8', 'replace')}")
+                return
+            out.append(t)
+            # ALL children, not just named ones: operators (+ - == &&) and
+            # keywords (const/let/func) are ANONYMOUS nodes in tree-sitter, so
+            # walking named_children silently dropped them and made `a + b`
+            # compare equal to `a - b` — a false AGREEMENT, which is the
+            # dangerous direction for a drift sensor. Pure delimiters stay
+            # excluded: they carry no meaning the tree shape doesn't already
+            # encode, and counting `;` would resurrect the semicolon false drift.
+            for ch in node.children:
+                if ch.is_named:
+                    walk(ch)
+                elif ch.type not in _TS_PUNCT:
+                    out.append(f"op:{ch.type}")
+
+        try:
+            walk(tree.root_node)
+        except RecursionError:
+            return None
+        return f"{name}\n" + "\n".join(out)
+    return None
 
 
 def _py_skeleton(text):
@@ -756,12 +853,20 @@ def _outputs_agree(a, b):
     pinned at 0, and the FSRS interval never grew (found 2026-07-18). When both
     sides are parseable Python, compare structure instead.
     """
-    a_s, b_s = _strip_fences(a), _strip_fences(b)
+    a_s, a_lang = _split_fence(a)
+    b_s, b_lang = _split_fence(b)
     if _normalize_output(a_s) == _normalize_output(b_s):
         return True
     ska, skb = _py_skeleton(a_s), _py_skeleton(b_s)
     if ska is not None and skb is not None:
         return ska == skb
+    # Non-Python code: same structural comparison via tree-sitter when it is
+    # installed. Falls through to the old exact-match result when it is not, so
+    # the zero-dependency path is unchanged.
+    tsa = _ts_skeleton(a_s, a_lang or b_lang)
+    tsb = _ts_skeleton(b_s, b_lang or a_lang)
+    if tsa is not None and tsb is not None:
+        return tsa == tsb
     return False
 
 
