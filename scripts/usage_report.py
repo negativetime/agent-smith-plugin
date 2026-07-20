@@ -21,6 +21,17 @@ def run_key(r):
     return (r.get("ts"), r.get("script"), r.get("model"))
 
 
+def is_benchmark(r):
+    """True for agent-gym eval traffic rather than real delegated work.
+
+    The gym drives the same gemini.py, so its evals land in this ledger too.
+    Pooling them with production inflated fleet-usage counts and made the
+    offload gap read smaller than it is (found 2026-07-20). `gym-eval` tags
+    new rows; project name catches the ones logged before that tag existed.
+    """
+    return r.get("tag") == "gym-eval" or r.get("project") == "agent-gym"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--last", type=int, default=10, help="recent rows to show")
@@ -66,9 +77,14 @@ def main():
     secs = sum(r.get("seconds") or 0 for r in rows)
     tok_out = sum(r.get("tokens_out") or 0 for r in rows)
 
+    bench = [r for r in rows if is_benchmark(r)]
     print(f"ledger: {LEDGER}")
     print(f"runs: {len(rows)}  |  wall-clock delegated: {secs/60:.1f} min"
           + (f"  |  gemini output tokens: {tok_out:,}" if tok_out else ""))
+    if bench:
+        print(f"  of which {len(bench)} are agent-gym BENCHMARK runs, not delegated work "
+              f"— verdicts on them are still graded evidence, but they do not count as "
+              f"fleet usage (gap_report excludes them)")
     if agentic:
         print(f"agentic (smith_agent): {len(agentic)} runs, "
               f"{finished} finished ({finished/len(agentic):.0%}); "

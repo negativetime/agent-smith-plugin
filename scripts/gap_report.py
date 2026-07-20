@@ -86,6 +86,18 @@ LEGACY = {"research": _is_research,
           "long-digest": _is_digest}
 
 
+def is_benchmark(r):
+    """agent-gym eval traffic, not real delegated work.
+
+    The gym drives the same gemini.py, so its evals land in this ledger. Counting
+    them as fleet usage overstates delegation and shrinks the apparent gap — the
+    error flatters us, which is the worst direction for it to run (2026-07-20:
+    6 of the 8 most recent rows were evals). `gym-eval` tags new rows; the project
+    name catches those logged before that tag existed.
+    """
+    return r.get("tag") == "gym-eval" or r.get("project") == "agent-gym"
+
+
 def load_ledger():
     rows, verdicts = [], {}
     if not os.path.isfile(LEDGER):
@@ -137,13 +149,19 @@ def main():
     calls = dict(audit.get("tool_calls") or [])
     chars = dict(audit.get("tool_result_chars") or [])
 
-    rows, verdicts = load_ledger()
+    all_rows, verdicts = load_ledger()
+    # Benchmark runs are excluded from fleet-usage counts: an eval is not a
+    # delegation. Their VERDICTS still stand as graded evidence for routing.
+    bench = [r for r in all_rows if is_benchmark(r)]
+    rows = [r for r in all_rows if not is_benchmark(r)]
     by_tag = Counter(r.get("tag") for r in rows if r.get("tag"))
     tagged = sum(by_tag.values())
 
     print("OFFLOAD GAP — Claude-side work vs fleet-side work, by task shape")
     print("=" * 78)
-    print(f"ledger: {len(rows)} runs ({tagged} tagged)   audit: {args.audit}")
+    print(f"ledger: {len(rows)} delegated runs ({tagged} tagged)"
+          + (f", {len(bench)} gym-eval runs excluded" if bench else "")
+          + f"   audit: {args.audit}")
     print("Claude-side counts are ~30d of transcripts; fleet-side is ledger lifetime,")
     print("and only runs since 2026-07-18 carry tags — so ratios read as a floor.\n")
 
@@ -156,7 +174,10 @@ def main():
         legacy_n = sum(1 for r in rows if not r.get("tag") and legacy_pred(r)) \
             if legacy_pred else 0
         fleet = tagged_n + legacy_n
-        trust = trust_for(s["tag"], rows, verdicts)
+        # all_rows on purpose: a gym eval is not fleet USAGE, but a verdict on one
+        # is still graded evidence of how a model performs at that shape — often
+        # better evidence than production review, since a hidden grader scored it.
+        trust = trust_for(s["tag"], all_rows, verdicts)
 
         if s.get("tools"):
             claude_unit, claude_val = "calls", claude_calls
