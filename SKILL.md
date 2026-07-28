@@ -312,6 +312,23 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   python3 "$SKILL/scripts/gemini.py" --backend openai --base-url zai \
     --model glm-4.5-flash --max-tokens 3000 --tag code-draft "..."
   ```
+- **Embeddings + reranking — `scripts/embed.py` (NEW 2026-07-28).** The fleet had neither
+  until now; every retrieval question was Claude reading files. Free on Workers AI, needs
+  `CF_API_TOKEN` + `CF_ACCOUNT_ID`.
+  ```bash
+  # rank a corpus against a query — the high-value one
+  python3 "$SKILL/scripts/embed.py" --rerank --query "reverse a linked list" \
+      --docs corpus.txt --top-k 5 --tag rerank
+  # raw 1024-dim vectors for your own index
+  python3 "$SKILL/scripts/embed.py" --docs corpus.txt --out vectors.jsonl --tag embed
+  ```
+  `@cf/baai/bge-m3` (1024-dim, multilingual) · `@cf/baai/bge-reranker-base`.
+  **Pick by score shape, measured:** the reranker gives a CLIFF (0.99 / 0.97 for two
+  relevant docs, then 0.02 for the first irrelevant one) so it is the precision filter;
+  embeddings give a GRADIENT (0.72 relevant, 0.51 loosely related, 0.35 unrelated) so they
+  are for recall and indexing. Reranking a shortlist beats thresholding cosine similarity.
+  Chunks at 100 candidates and merges on score — the ids the API returns are chunk-local
+  and are mapped back to caller indices, so never trust a raw `id` as a corpus index.
   **Cloudflare Workers AI — what is FREE (measured 2026-07-28).** GLM-5.2 is **not**:
   `@cf/zai-org/glm-5.2` returns HTTP 403 code 5035 "requires a Workers Paid plan". These
   DO work on the free plan and need no Worker deployed — Workers AI is a plain REST call:
