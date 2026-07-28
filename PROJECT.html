@@ -51,7 +51,9 @@ a{color:var(--ac)}
 <tr><td>Verdicts</td><td><code>scripts/verdict.py good|bad "why" --tag SHAPE --model M</code></td></tr>
 <tr><td>Gap finder</td><td><code>scripts/gap_report.py</code> — where the fleet is UNUSED or MISROUTED</td></tr>
 <tr><td>Fleet identity</td><td><code>scripts/fleet_check.py</code> — digests vs accepted baseline</td></tr>
+<tr><td>WebSearch nudge</td><td><code>scripts/research_nudge.py</code> — non-blocking <code>PreToolUse</code> hook, wired in <code>~/.claude/settings.json</code></td></tr>
 <tr><td>Ledger data</td><td><code>data/usage.jsonl</code> (untracked; <code>SMITH_LEDGER</code> overrides)</td></tr>
+<tr><td>Archived outputs</td><td><code>data/outputs/&lt;date&gt;/&lt;ts&gt;-&lt;script&gt;-&lt;model&gt;.txt</code> (untracked) — what makes a run reviewable</td></tr>
 <tr><td>House doc shell</td><td><code>references/html-doc-shell.html</code> — ~1KB CSS, reuse VERBATIM</td></tr>
 <tr><td>Playbooks</td><td><code>references/playbooks.md</code> · token audit: <code>references/token-audit-2026-07-12.md</code></td></tr>
 <tr><td>Gym (earns the tiers)</td><td><code>/Users/joshualangberg/Python/agent-gym</code></td></tr>
@@ -60,8 +62,8 @@ a{color:var(--ac)}
 <h2>2 · The delegation loop (standing practice)</h2>
 <p>Close the loop on every delegation or the fleet silently stops improving. Also recorded in global <code>~/.claude/CLAUDE.md</code>.</p>
 <ol>
-<li><strong>Tag every call</strong> — <code>--tag SHAPE</code> (<code>research</code>, <code>doc-format</code>, <code>classify</code>, <code>vision-prescreen</code>, <code>long-digest</code>, <code>copy-draft</code>), plus <code>--purpose "..."</code> when the first prompt line is a poor title. Untagged runs are invisible to the gap report.</li>
-<li><strong>Verdict after review</strong> — <code>verdict.py good|bad "why" --tag SHAPE --model M</code>. Feeds hebbian routing weights: streak 5 = light review, 10 = spot-check. One bad resets it. Use <code>--ts</code> for precision; <code>--model</code> silently targets the most recent run of that name, which has already misfiled one verdict.</li>
+<li><strong>Tag every call — ENFORCED IN CODE since 2026-07-28.</strong> <code>gemini.py</code> exits 2 on a missing <code>--tag</code> before spending anything. Shapes: <code>research</code>, <code>doc-format</code>, <code>classify</code>, <code>vision-prescreen</code>, <code>long-digest</code>, <code>copy-draft</code>, <code>code-draft</code>, <code>translate</code>, <code>subagent-fanout</code>, plus <code>smoke</code> for throwaway routing checks. Add <code>--purpose "..."</code> when the first prompt line is a poor title. <code>smith_agent.py</code> and <code>transcribe.py</code> had NO tag flag at all until this date — their runs were structurally untaggable; both now default sensibly.</li>
+<li><strong>Verdict after review</strong> — <code>verdict.py good|bad|stale "why" --tag SHAPE --model M</code>. Feeds hebbian routing weights: streak 5 = light review, 10 = spot-check. One bad resets it. Use <code>--ts</code> for precision; <code>--model</code> silently targets the most recent run of that name, which has already misfiled one verdict. <code>stale</code> = the output no longer exists to judge; clears the queue without counting as good or bad. Every run now prints a <code>[review] N runs awaiting verdict</code> line to stderr.</li>
 <li><strong>Find gaps</strong> — <code>gap_report.py</code> monthly, on gym day, or when quota is tight. <code>--refresh</code> re-mines transcripts.</li>
 <li><strong>Every bad verdict becomes an agent-gym task</strong> before that shape is delegated again.</li>
 </ol>
@@ -76,10 +78,18 @@ a{color:var(--ac)}
 <tr><td>Witness comparator, other langs</td><td>FIXED 2026-07-20 — optional tree-sitter, 12/12 cases correct</td></tr>
 <tr><td>Benchmark vs production split</td><td>SHIPPED 2026-07-20 — gym evals no longer counted as delegation</td></tr>
 <tr><td>doc-format routing</td><td>CORRECTED 2026-07-19 — gpt-oss:20b off this lane</td></tr>
-<tr><td>Verdict coverage</td><td>35 good / 7 bad reviewed, ~800 legacy unreviewable</td></tr>
+<tr><td>Tag enforcement</td><td>SHIPPED 2026-07-28 — missing <code>--tag</code> exits 2; habit alone had left 863/915 runs untagged</td></tr>
+<tr><td>Output archiving</td><td>SHIPPED 2026-07-28 — <code>data/outputs/</code>; the loop demanded verdicts while storing nothing to judge</td></tr>
+<tr><td><code>stale</code> verdict</td><td>SHIPPED 2026-07-28 — clears ungradeable runs without polluting good/bad</td></tr>
+<tr><td>Honest review metric</td><td>FIXED 2026-07-28 — "858 unreviewed" was really 58; the rest are legacy or smoke</td></tr>
+<tr><td>MISROUTED false alarm</td><td>FIXED 2026-07-28 — gated on <code>still_routed()</code>; research→flash had been closed in code since 07-27 yet fired every run</td></tr>
+<tr><td>WebSearch nudge hook</td><td>SHIPPED 2026-07-28 — non-blocking, quiet for 2 searches then 3rd + every 4th</td></tr>
+<tr><td>Verdict coverage</td><td>51 good / 28 bad reviewed, 22 awaiting, 17 stale, 831 legacy-or-smoke unreviewable</td></tr>
 </tbody>
 </table>
-<p><strong>Measured 2026-07-19: web research is 2% delegated</strong> — 1,467 Claude calls vs 24 fleet runs, while <code>research @ gemini-pro-latest</code> already holds a 7-good streak at light-review trust. Read-only subagent fan-out is 0% of 663 Agent spawns. The blocker is habit, not tooling. This corroborates the 2026-07-12 audit's independently measured 0.2% overall offload ratio.</p>
+<div class="card"><strong>The queue burn-down, 2026-07-28 — 59 → 22.</strong> Working it exposed why it existed: the loop demanded a verdict on every run while <code>gemini.py</code> <strong>stored no output to judge</strong>. 17 runs had aged into permanently ungradeable (deleted scratchpad workdirs, outputs consumed in-conversation). Fixed going forward by archiving every output; the historical 17 are marked <code>stale</code> rather than fake-graded. <strong>The headline stat was also lying:</strong> "858 unreviewed" pooled 800 pre-2026-07-18 rows with no stored purpose and 7 <code>say hi</code> routing checks with a real queue of 58. A metric nobody trusts is worse than no metric.</div>
+<p><strong>Measured 2026-07-19, re-measured 2026-07-28 and essentially unmoved: web research is 3% delegated</strong> — 1,467 Claude calls vs 38 fleet runs, while <code>research @ gemini-pro-latest</code> holds 11 good / 1 bad at light-review trust. Read-only subagent fan-out is 0% of 663 Agent spawns. The blocker is habit, not tooling — nine days of documenting it in SKILL.md and memory moved the number by one point. This corroborates the 2026-07-12 audit's independently measured 0.2% overall offload ratio.</p>
+<p><strong>So the habit got a mechanical nudge (2026-07-28).</strong> <code>scripts/research_nudge.py</code> is a <code>PreToolUse</code> hook on <code>WebSearch</code> that never blocks: silent for the first 2 searches of a session, then it prints the exact <code>--search --tag research</code> command on the 3rd and every 4th after (<code>SMITH_NUDGE_AFTER</code> / <code>SMITH_NUDGE_EVERY</code>). Sparse on purpose — a nag on every lookup becomes wallpaper. <strong>Verified live that <code>hookSpecificOutput.additionalContext</code> DOES reach Claude from <code>PreToolUse</code></strong>: the official docs contradict each other on this (the reference schema lists the field, the guide documents it only for <code>UserPromptSubmit</code>), so it was tested rather than assumed. Check whether it actually moves the ratio.</p>
 <p><strong>Benchmark traffic is not delegation (2026-07-20).</strong> agent-gym drives the same <code>gemini.py</code>, so its evals landed in this ledger indistinguishable from real work — 6 of the 8 most recent rows were evals counted as fleet usage, inflating delegation and making the offload gap read smaller than it is. The error ran in the flattering direction. Gym runs now self-tag <code>gym-eval</code>; <code>usage_report.py</code> names the count and <code>gap_report.py</code> excludes it. Their VERDICTS still feed routing weights on purpose: an eval is not usage, but a hidden grader scoring an artifact is stronger evidence than a subjective production review.</p>
 <h2>4 · Fleet routing (gym-earned)</h2>
 <table>
@@ -107,7 +117,11 @@ a{color:var(--ac)}
 </ul>
 <h2>6 · Gotchas & lessons</h2>
 <ul>
+<li><strong>Structural validation cannot catch a correctly-formatted wrong word.</strong> The biggest fleet defect found to date shipped through a clean validator. More Garlic's 9-locale UI translation was machine-checked for placeholders, brand and tokens and legitimately returned <strong>0 problems</strong> — 0 placeholder mismatches and 0 empties across 2,763 strings, all true. Meanwhile "trip" (a grocery run) was rendered as a <strong>travel journey</strong> in 8 of 9 locales (es <code>viaje</code>, fr <code>voyage</code>, it <code>viaggio</code>, pt-BR <code>viagem</code>, ru <code>поездка</code>, ja <code>トリップ</code>, ko <code>여행</code>, zh-Hans <code>行程</code>; de left it as English), zh-Hans carried a hallucinated English word (<code>模拟器 footprint 中相机不可用</code>), and Italian used Spanish <code>que</code> for <code>che</code>. 27 instances reached the live 1.1 build. <strong>Any bulk-transform lane — translate, paraphrase, classify — needs a meaning-level spot-check, not just a format check.</strong></li>
+<li><strong>Pin the vocabulary or the model invents it.</strong> The same lane, same model, re-run with a glossary of app-specific terms pinned in the prompt, scored clean: 180/180 correct placeholders, zero banned terms, and it kept quoted button labels byte-identical to the buttons' own translations. The fix was the glossary, not the model. Ledger has both runs — <code>translate</code> bad without, good with.</li>
+<li><strong>Fleet-grades-fleet works, with two conditions.</strong> A different model must do the grading, and every load-bearing claim must be hand-checked before it counts. <code>gemini-pro</code> QA of those translations produced 20 findings with zero false positives on spot-check against the catalog. Without the hand-check it would just be one model's opinion entering the routing table as evidence.</li>
 <li><strong>The ledger is blind to what was never delegated.</strong> It only sees delegated work, so gaps live in the Claude transcripts. That is what <code>gap_report.py</code> joins; neither dataset shows a gap alone.</li>
+<li><strong>A stat that pools unfixable rows with actionable ones stops being read.</strong> "858 unreviewed" was 800 permanently-unreviewable legacy rows plus 7 smoke tests plus a real queue of 58. Same for the MISROUTED alarm that kept firing on a route already closed in code. Both were fixed by narrowing the denominator to what someone can actually act on.</li>
 <li><strong>Exact-match is wrong for code, in every language.</strong> The witness compared raw text, so a markdown fence or a type hint read as drift: 18% agreement, every streak pinned at 0, the interval never grew. Python now compares as stdlib <code>ast</code> skeletons with annotations, docstrings and comments normalized away; other languages via tree-sitter. Before the second fix, all six non-Python probes returned False — spacing, semicolons, comments and quote style were indistinguishable from a renamed function or changed logic. DRIFT entries before 2026-07-20 are mostly spurious.</li>
 <li><strong>tree-sitter is error-tolerant</strong> — it returns a tree for nonsense input instead of raising, so any tree carrying an error must be rejected as not-that-language. Otherwise two unrelated blobs both "parse" and compare similar.</li>
 <li><strong>Operators and keywords are ANONYMOUS tree-sitter nodes.</strong> Walking <code>named_children</code> dropped them and made <code>a + b</code> compare equal to <code>a - b</code> — a false AGREEMENT, the dangerous direction for a sensor. Found only because the test carried expected values; eyeballing the output had looked fine.</li>
@@ -121,12 +135,17 @@ a{color:var(--ac)}
 <h2>7 · Run / review</h2>
 <pre><code>SKILL=~/.claude/skills/agent-smith
 
-# a tagged delegation (ALWAYS tag)
+# a tagged delegation — --tag is REQUIRED, a missing one exits 2 before spending
 python3 "$SKILL/scripts/gemini.py" --search --tag research "What changed in X?"
+python3 "$SKILL/scripts/gemini.py" --tag smoke "say hi"   # throwaway: stays out of the queue
 
 # review + verdict (prefer --ts over --model for precision)
 python3 "$SKILL/scripts/usage_report.py" --unreviewed
 python3 "$SKILL/scripts/verdict.py" good "why" --ts 2026-07-20T10:59:19 --tag research
+python3 "$SKILL/scripts/verdict.py" stale "workdir gone, nothing survives to grade" --ts ...
+
+# the output a verdict is judging (archived since 2026-07-28)
+ls "$SKILL/data/outputs/$(date +%F)/"       # SMITH_NO_ARCHIVE=1 opts a run out
 
 # where is the fleet NOT being used
 python3 "$SKILL/scripts/gap_report.py"            # --refresh re-mines transcripts
@@ -139,8 +158,10 @@ pip install tree-sitter tree-sitter-language-pack</code></pre>
 <h2>8 · Open items</h2>
 <ul>
 <li><strong>No git remote.</strong> Commits live only on this Mac. Add a remote if they should be backed up.</li>
-<li><strong>~800 legacy ledger rows are unreviewable</strong> — they predate purpose logging and cannot be reconstructed. Going-forward fix only.</li>
-<li><strong>Verdict discipline is the live risk.</strong> Routing weights rest on 42 reviewed runs out of 845.</li>
+<li><strong>~800 legacy ledger rows are unreviewable</strong> — they predate purpose logging and cannot be reconstructed. Going-forward fix only; they are now excluded from the review stat instead of inflating it.</li>
+<li><strong>Verdict discipline is still the live risk, but it is now tractable.</strong> Routing weights rest on 79 reviewed runs with 22 actionable in the queue — no longer an 858-deep pit. Outputs archive from 2026-07-28, so nothing new can age into ungradeable.</li>
+<li><strong>22 runs still awaiting verdict</strong> — 20 recipe-paraphrase, 1 doc-format, 1 gym-eval. All have artifacts on disk, so these are genuinely reviewable, unlike the 17 marked <code>stale</code>.</li>
+<li><strong>Does the nudge actually work?</strong> The <code>WebSearch</code> hook shipped 2026-07-28 with research at 3% delegated. Re-run <code>gap_report.py</code> in a couple of weeks; if the ratio has not moved, the nudge is wallpaper and the lever is somewhere else.</li>
 <li><strong>Witness drift entries before 2026-07-20 should be ignored</strong> — spurious, from the old comparators.</li>
 <li><strong>Subagent fan-out has no verdicts yet</strong> — 0 of 663 Agent spawns delegated, so the shape has no measured trust.</li>
 <li><strong><code>smart-explore</code> (tree-sitter, already installed via claude-mem) is unused.</strong> It targets <code>Read</code> — 562.3 M chars, 50.8% of tool-result volume and the single biggest context consumer, which RTK explicitly bypasses. Reaching for <code>smart_search</code> before <code>Read</code> is a habit change, not a tooling gap.</li>
