@@ -329,15 +329,24 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   are for recall and indexing. Reranking a shortlist beats thresholding cosine similarity.
   Chunks at 100 candidates and merges on score — the ids the API returns are chunk-local
   and are mapped back to caller indices, so never trust a raw `id` as a corpus index.
-  **Cloudflare Workers AI — what is FREE (measured 2026-07-28).** GLM-5.2 is **not**:
-  `@cf/zai-org/glm-5.2` returns HTTP 403 code 5035 "requires a Workers Paid plan". These
-  DO work on the free plan and need no Worker deployed — Workers AI is a plain REST call:
-  | model | note |
-  |---|---|
-  | `@cf/openai/gpt-oss-120b` | **best free find** — 120B, ~6× the local `gpt-oss:20b`, zero RAM/swap cost, and it OBEYS "code only" (the local 20b and z.ai glm-4.5-flash both add prose) |
-  | `@cf/qwen/qwen2.5-coder-32b-instruct` | coder lane |
-  | `@cf/zai-org/glm-4.7-flash` | GLM family, one rung below 5.2 |
-  | ~~`@cf/meta/llama-3.1-8b-instruct`~~ | HTTP 410, deprecated 2026-05-30 |
+  **Cloudflare Workers AI — NOTHING is free; there is a small daily allowance
+  (corrected 2026-07-28, an earlier note in this file wrongly said "FREE").** Every model
+  is priced. Workers AI bills **$0.011 per 1,000 neurons** with a **10,000 neuron/day free
+  allocation ≈ $0.11/day**. On **Workers Free the allowance is a HARD STOP** — calls fail
+  once it is gone; only Workers Paid bills overage. `@cf/zai-org/glm-5.2` is additionally
+  gated: HTTP 403 code 5035 "requires a Workers Paid plan" regardless of allowance.
+  What $0.11/day actually buys (derived from the published per-model rates):
+  | model | in tok/day | out tok/day | verdict |
+  |---|---|---|---|
+  | `@cf/baai/bge-reranker-base` | ~35 M | — | effectively unlimited at our scale |
+  | `@cf/baai/bge-m3` | ~9 M | — | effectively unlimited |
+  | `@cf/openai/gpt-oss-120b` | ~314 k | ~147 k | real but EXHAUSTIBLE — a few big jobs/day |
+  | `@cf/qwen/qwen2.5-coder-32b-instruct` | ~167 k | ~110 k | exhaustible |
+  | `@cf/zai-org/glm-5.2` | ~79 k | ~25 k | blocked on Free anyway |
+  | ~~`@cf/meta/llama-3.1-8b-instruct`~~ | — | — | HTTP 410, deprecated 2026-05-30 |
+  **So route by cost shape:** embeddings/reranking are ~300× cheaper per token than the
+  chat models — treat those as free and the LLM lanes as a daily budget. No Worker needs
+  deploying either way; Workers AI is a plain REST call.
   **Cloudflare token gotcha (cost a wrong diagnosis 2026-07-28).** Modern CF credentials
   carry a prefix + CRC32 suffix: `cfk_` user API key · `cfut_` user API token ·
   **`cfat_` ACCOUNT-OWNED API token**. An account-owned token **does not verify at
