@@ -63,9 +63,14 @@ DEFAULT_LOCAL_FOR_TAG = {
     "doc-format": "qwen3-coder:30b",       # 2g/0b (gpt-oss:20b is BLOCKED here, 0g/3b — don't use it)
     "classify": "llama3.2:3b",             # 1g/0b
     "vision-prescreen": "qwen3-vl:4b",     # 3g/0b, TRUSTED
-    "long-digest": "gpt-oss:20b",          # 1g/0b; also the resident model — zero swap cost
     "subagent-fanout": "gpt-oss:20b",      # 1g/0b (2026-07-27 smoke test)
 }
+# PRIVACY OVERRIDE (2026-07-28): long-digest moved to DEFAULT_PAID_FOR_TAG below for the
+# general case, but content with credentials/PII/anything sensitive must still be sent here
+# explicitly: `--backend ollama --model gpt-oss:20b` (131k ctx, zero swap cost, resident).
+# Claude verification catches WRONG FACTS in a cloud draft; it does not catch data having
+# already left the machine. That's a different axis than speed or accuracy, and the paid
+# lane doesn't resolve it — reach for local by hand whenever the content warrants it.
 
 # Paid-subscription default: tags with a MEASURED-good FLAT-RATE cloud lane — the z.ai
 # GLM Coding Plan (subscribed 2026-07-28, $18/mo flat; the marginal cost of one more
@@ -78,8 +83,22 @@ DEFAULT_LOCAL_FOR_TAG = {
 # Claude") — that intent is itself the routing justification here, same as any other
 # measured-good/bad split. Checked BEFORE DEFAULT_LOCAL_FOR_TAG so it takes priority
 # for any tag listed in both.
+#
+# long-digest added 2026-07-28 after a head-to-head vs the local TRUSTED baseline
+# (gpt-oss:20b) on the same document + same 5 questions: GLM 4/5 in 25s, gpt-oss:20b
+# 5/5 in 4:49 — an 11x wall-clock gap for a one-point accuracy difference. The user's
+# call: since Claude verifies every delegated output regardless of which model drafted
+# it (standing rule, not new for this tag), a small accuracy gap shouldn't outweigh an
+# 11x time cost — verification is the constant, so optimize the other variable. GLM's
+# context window (1M, docs-verified) comfortably exceeds gpt-oss:20b's 131k, so this
+# isn't a capacity tradeoff either. Ledger's own reasoning-budget finding applies:
+# min_max_tokens=8000 (a 2000 floor calibrated for code-draft left this tag returning
+# EMPTY content — reasoning ate the entire budget on a document-grounded task).
+# PRIVACY IS NOT COVERED BY THIS ENTRY — see the note above DEFAULT_LOCAL_FOR_TAG.
 DEFAULT_PAID_FOR_TAG = {
     "code-draft": {"model": "glm-5.2", "base_url": "https://api.z.ai/api/coding/paas/v4"},
+    "long-digest": {"model": "glm-5.2", "base_url": "https://api.z.ai/api/coding/paas/v4",
+                    "min_max_tokens": 8000},
 }
 
 # --- Per-model prompt tailoring --------------------------------------------------
@@ -1326,6 +1345,15 @@ def main():
         log(f"[paid] --tag {args.tag} defaults to the z.ai GLM Coding Plan "
             f"(--backend openai --model {args.model}) — flat-rate subscription, "
             f"already paid for, marginal cost $0 — pass --backend/--model to override")
+        # Reasoning models spend part of the budget on a hidden channel before writing
+        # visible content — a floor calibrated for one task shape can leave another
+        # shape returning EMPTY (measured: 2000 was fine for code-draft, long-digest
+        # needed 8000). Only ever raises the ceiling, never lowers an explicit --max-tokens.
+        floor = cfg.get("min_max_tokens")
+        if floor and (args.max_tokens is None or args.max_tokens < floor):
+            log(f"[paid] --tag {args.tag} raises --max-tokens to {floor} "
+                f"(reasoning-budget floor for this shape) — pass --max-tokens to override")
+            args.max_tokens = floor
     elif args.backend is None and args.model is None and not args.search \
             and args.tag in DEFAULT_LOCAL_FOR_TAG:
         args.backend = "ollama"

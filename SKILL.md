@@ -170,21 +170,43 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 
 **Enforced in code as of 2026-07-27 (cost pass — user wants minimum spend):** `gemini.py`'s
 `DEFAULT_LOCAL_FOR_TAG` table auto-routes `--tag doc-format|classify|vision-prescreen|
-long-digest|subagent-fanout` to the free local model below whenever BOTH `--backend` and
-`--model` are left unset — logs `[cost] --tag X defaults to local`. Passing either flag
-explicitly still wins (e.g. `--backend gemini` forces cloud). `--search` always forces cloud
-(no local web grounding) regardless of tag.
+subagent-fanout` to the free local model below whenever BOTH `--backend` and `--model` are
+left unset — logs `[cost] --tag X defaults to local`. Passing either flag explicitly still
+wins (e.g. `--backend gemini` forces cloud). `--search` always forces cloud (no local web
+grounding) regardless of tag.
 
-**`code-draft` moved to a NEW `DEFAULT_PAID_FOR_TAG` table as of 2026-07-28** — bare
-`--tag code-draft` now routes to the z.ai **GLM Coding Plan** (`glm-5.2`,
-`https://api.z.ai/api/coding/paas/v4`, needs `ZAI_API_KEY`), logging `[paid] --tag
-code-draft defaults to the z.ai GLM Coding Plan`. This is a flat $18/mo subscription — the
-marginal cost of one more call is $0, so it's checked BEFORE the free-local table and wins
-where both would apply. Justification: agent-gym swept it 27/27 the same day (all 5 agentic
-tasks incl. native tool-calling), it beat the local TRUSTED baseline's wall-clock on 4/5
-agentic tasks, AND the user explicitly asked to prioritize using a resource already paid
-for. `--backend ollama --model qwen3-coder:30b` (or gemma4:26b) still works as an explicit
-override — local stays free/private, just no longer the silent default for this one tag.
+**`code-draft` AND `long-digest` moved to a NEW `DEFAULT_PAID_FOR_TAG` table as of
+2026-07-28** — bare `--tag code-draft` or `--tag long-digest` now route to the z.ai
+**GLM Coding Plan** (`glm-5.2`, `https://api.z.ai/api/coding/paas/v4`, needs
+`ZAI_API_KEY`), logging `[paid] --tag X defaults to the z.ai GLM Coding Plan`. Flat $18/mo
+subscription — the marginal cost of one more call is $0, so this table is checked BEFORE
+the free-local table and wins where both would apply. `code-draft`'s justification:
+agent-gym swept it 27/27 the same day (all 5 agentic tasks incl. native tool-calling), beat
+the local TRUSTED baseline's wall-clock on 4/5 agentic tasks, and the user explicitly asked
+to prioritize a resource already paid for.
+
+`long-digest`'s justification is different and worth stating precisely, because it's a
+judgment call, not just a benchmark win: a head-to-head vs the local TRUSTED baseline
+(`gpt-oss:20b`) on the same document + same 5 questions scored GLM 4/5 in 25s vs
+gpt-oss:20b 5/5 in **4:49** — an 11x wall-clock gap for a one-point accuracy difference.
+The user's call: Claude verifies every delegated output regardless of which model drafted
+it — that's not new for this tag, it's the standing rule — so a small accuracy gap
+shouldn't outweigh an 11x time cost; verification is the constant, optimize the other
+variable. GLM's context window (1M, docs-verified) comfortably exceeds gpt-oss:20b's 131k,
+so this isn't a capacity tradeoff either. **What this does NOT resolve: privacy.**
+Verification catches wrong facts in a cloud draft; it does not catch data having already
+left the machine. For anything genuinely sensitive (credentials, PII, private content),
+route explicitly to local — `--backend ollama --model gpt-oss:20b` — by hand, every time;
+the paid default does not know to make that call for you.
+
+Both paid-default tags auto-raise `--max-tokens` to a measured floor (currently 8000 for
+`long-digest`) if the caller left it unset or too low — a budget calibrated for one shape
+can leave another shape returning EMPTY content, since GLM spends part of its budget on a
+hidden reasoning channel before writing anything visible. Passing `--max-tokens` explicitly
+still wins if it's already at or above the floor.
+
+`--backend ollama --model qwen3-coder:30b` (or `gemma4:26b`) still works as an explicit
+override for `code-draft` — local stays free/private, just no longer the silent default.
 
 Tags below this line with neither a `DEFAULT_PAID_FOR_TAG` nor `DEFAULT_LOCAL_FOR_TAG` entry
 (`translate`, `copy-draft`, `design`, `research`, …) still default to the pay-per-token
@@ -198,11 +220,13 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   (`--tag subagent-fanout` — must match `gap_report.py`'s `SHAPES` tag exactly, or the run
   is invisible to the gap report; `fanout-digest` was a stale/wrong tag name here until
   2026-07-27, never actually used). Biggest untouched vein: 663 Claude-side Agent/Explore
-  calls, **0 delegated**. No verdicts yet — trial route; verdict the first few to build
-  the record.
-- **Long-document digest** (logs, transcripts, CSVs, contracts) → `--backend ollama
-  --model gpt-oss:20b` (131k ctx; 1g/0b) (`--tag long-digest`). ~141M Claude context tokens
-  went to reading long docs; default local first, Claude reads the distilled version.
+  calls, still **0% delegated** as of 2026-07-28. First real evidence landed that day
+  though: a 10-file read+summarize test against `zai-glm-5.2` scored 10/10 against ground
+  truth (verdict good) — a genuine trial-ready result, not just an untested route anymore.
+- **Long-document digest** (logs, transcripts, CSVs, contracts) → bare `--tag long-digest`
+  now defaults to the paid GLM Coding Plan (see DEFAULT-TO-PAID above). Route explicitly to
+  `--backend ollama --model gpt-oss:20b` (131k ctx) for anything sensitive — that's a
+  privacy call the default can't make for you.
 - **Screenshot / vision prescreen** → `--backend ollama --model qwen3-vl:4b --file shot.png`
   (`--tag vision-prescreen`; 3g/0b TRUSTED). ~127M Claude context tokens of screenshots;
   local first-pass describes, Claude views only flagged shots. Digit-string crop rule applies.
