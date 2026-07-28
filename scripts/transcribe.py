@@ -45,6 +45,8 @@ def main():
     ap.add_argument("--language", default=None, help="e.g. en (default: autodetect)")
     ap.add_argument("--timestamps", action="store_true",
                     help="print [mm:ss] per segment instead of plain text")
+    ap.add_argument("--tag", default="audio-transcribe", metavar="TASKSHAPE",
+                    help="task-shape label for the ledger (default: audio-transcribe).")
     args = ap.parse_args()
 
     if not os.path.isfile(args.audio):
@@ -76,7 +78,7 @@ def main():
         dur = round(segs[-1].get("end", 0), 1)
     print(f"\n--- transcribe meta ---\nmodel: {model}  audio_s: {dur}  "
           f"wall_s: {round(time.time() - t0, 1)}", file=sys.stderr)
-    _ledger({"script": "transcribe", "backend": "mlx", "model": model,
+    _ledger({"script": "transcribe", "backend": "mlx", "model": model, "tag": args.tag,
              "audio": os.path.basename(args.audio), "audio_seconds": dur,
              "out_chars": len(result.get("text", "")),
              "seconds": round(time.time() - t0, 1), "status": "ok"})

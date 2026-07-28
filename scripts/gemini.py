@@ -41,6 +41,100 @@ ALIASES = {
     "flash-lite": "gemini-flash-lite-latest",
 }
 
+# Tag-based default overrides for the gemini (cloud API) backend: when --model is
+# omitted, the tag can pick a better default than the hardcoded "flash" fallback.
+# Source of truth: usage ledger verdicts (see ROUTE_WARNINGS below and
+# references/measured-results.md). Only add an entry once a tag has a measured,
+# lopsided good/bad split against the plain "flash" default — this is a routing
+# fix, not a place to guess.
+#   research: flash scored 0 good / 1 bad (MISROUTED); pro scored 9 good / 1 bad.
+DEFAULT_MODEL_BY_TAG = {
+    "research": "pro",
+}
+
+# Cost-driven default: tags with a MEASURED-good local (free/unlimited) model default to
+# --backend ollama instead of the paid cloud API, when the caller left BOTH --backend and
+# --model unset (an explicit --backend or --model always wins — this only resolves the
+# "just a tag + prompt" case). --search forces cloud regardless (web grounding has no local
+# equivalent), so it's never in this table. Source: usage ledger verdicts (usage_report.py)
+# + SKILL.md gym-trust notes as of 2026-07-27. Add a tag here only once it has a real
+# good/bad split backing it — this is a routing fix, not a place to guess.
+DEFAULT_LOCAL_FOR_TAG = {
+    "doc-format": "qwen3-coder:30b",       # 2g/0b (gpt-oss:20b is BLOCKED here, 0g/3b — don't use it)
+    "classify": "llama3.2:3b",             # 1g/0b
+    "code-draft": "qwen3-coder:30b",       # gym-trusted
+    "vision-prescreen": "qwen3-vl:4b",     # 3g/0b, TRUSTED
+    "long-digest": "gpt-oss:20b",          # 1g/0b; also the resident model — zero swap cost
+    "subagent-fanout": "gpt-oss:20b",      # 1g/0b (2026-07-27 smoke test)
+}
+
+# --- Per-model prompt tailoring --------------------------------------------------
+#
+# --system carries TASK framing (role/style/constraints); this carries MODEL
+# framing (known, MEASURED failure modes for that specific model, so the fix
+# lands on every call instead of only the ones where Claude remembers to type
+# it in by hand). Source: references/measured-results.md + SKILL.md lane notes.
+# Evidence-only: add a clause after a verdict.py bad, not on a hunch. Keep each
+# entry to one sentence — extra instruction text competes for attention in a
+# 3-20B model's context and can backfire on the small/fast ones.
+MODEL_PROFILES = {
+    "gpt-oss:20b": (
+        "Before returning, strip debug prints, dead or commented-out branches, and any "
+        "comment or docstring claiming behavior the code doesn't actually implement "
+        "(measured failure mode: this exact residue cost this model a blinded design "
+        "review against gemma4:26b)."
+    ),
+    "gemma4:26b": (
+        "If reading a tall or full-page screenshot, do not invent small text you can't "
+        "clearly resolve — say 'illegible' rather than fabricate a plausible-looking "
+        "label, price, or brand name (measured: this model confidently invented text on "
+        "tall captures while getting large headings exactly right)."
+    ),
+    "qwen3-vl:4b": (
+        "For any exact digit string 6+ characters long (ID, serial, phone number, key), "
+        "flag it as unverified rather than transcribing it with full confidence unless "
+        "you're reading a tight crop of just that field — full-window shots have dropped "
+        "a leading digit before."
+    ),
+    "agents-a1": (
+        "Do not let except/catch blocks silently swallow real errors such as validation "
+        "failures — a measured miss here let a failing validator pass silently instead "
+        "of raising."
+    ),
+}
+
+# Known (model, tag) combos that scored badly enough to be called out as a routing
+# block in SKILL.md. This is a WARNING, not a silent override: "use a different model"
+# is a decision that belongs in SKILL.md/Claude's hands, not something to patch over
+# with a prompt clause here. Sourced from gap_report.py + verdict history.
+ROUTE_WARNINGS = {
+    ("gpt-oss:20b", "doc-format"): (
+        "gpt-oss:20b scored 0 good / 3 bad on doc-format in the usage ledger — SKILL.md "
+        "recommends gemini-pro or gemma4:26b for this shape instead."
+    ),
+    ("gemini-flash-latest", "research"): (
+        "flash scored 0 good / 1 bad on research in the usage ledger (MISROUTED) — "
+        "SKILL.md recommends pro for research."
+    ),
+}
+
+
+def tailor_system(system, model, tag, no_tailor=False):
+    """Return (effective_system, applied_keys): --system with any matching per-model
+    corrective clause appended, plus the list of model keys that fired (empty if
+    none/--no-tailor). Also logs a one-line stderr warning for a known-bad
+    (model, tag) route, independent of --no-tailor — that's a routing decision, not
+    a prompt fix, so it isn't suppressed by disabling tailoring."""
+    if tag and (model, tag) in ROUTE_WARNINGS:
+        log(f"WARNING: [route] {ROUTE_WARNINGS[(model, tag)]}")
+    if no_tailor:
+        return system, []
+    clause = MODEL_PROFILES.get(model)
+    if not clause:
+        return system, []
+    effective = f"{system}\n\n{clause}" if system else clause
+    return effective, [model]
+
 
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
@@ -540,6 +634,38 @@ def _subject(prompt, explicit=None, limit=160):
     return " ".join((prompt or "").split())[:limit] or None
 
 
+def _unreviewed_count(path):
+    """How many REVIEWABLE runs still have no verdict — mirrors usage_report.py's
+    run_key/is_benchmark/is_reviewable logic. Benchmarks, smoke checks, and
+    pre-2026-07-18 rows (no stored purpose) can never be verdicted, so counting
+    them turned the nag into noise: it read 859 when the real queue was 58.
+    Swallows all errors — this is a nag, never allowed to break a real run."""
+    try:
+        rows, verdicted = [], set()
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(r, dict):
+                    continue
+                if r.get("script") == "verdict":
+                    verdicted.add((r.get("ref_ts"), r.get("ref_script"), r.get("ref_model")))
+                    continue
+                # Gym runs stay IN: an eval is not fleet usage, but it is still
+                # gradeable evidence, so usage_report keeps it in the review queue.
+                if r.get("script") == "witness" or r.get("tag") == "smoke":
+                    continue
+                if not (r.get("purpose") or r.get("task") or r.get("tag")):
+                    continue
+                rows.append(r)
+        return sum(1 for r in rows
+                   if (r.get("ts"), r.get("script"), r.get("model")) not in verdicted)
+    except Exception:
+        return None
+
+
 def _ledger(rec):
     """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
     Progress tracking only — must never affect the run, so it swallows everything."""
@@ -553,6 +679,13 @@ def _ledger(rec):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
+        # Only nag on rows that are themselves reviewable — a witness/verdict row
+        # would otherwise double-print the same reminder after a single run.
+        if rec.get("script") not in ("witness", "verdict"):
+            n = _unreviewed_count(path)
+            if n:
+                log(f"[review] {n} run{'s' if n != 1 else ''} awaiting verdict — "
+                    f"verdict.py good|bad \"why\" --tag {rec.get('tag') or 'SHAPE'}")
     except Exception:
         pass
 
@@ -924,6 +1057,16 @@ def run_batch(args, prompt):
         if any_img:
             log(f"note: manifest contains images — MODEL2 ({consensus}) must be a vision "
                 "model, or its votes will be silent garbage.")
+    sys_primary, tailored_primary = tailor_system(args.system, model, args.tag, args.no_tailor)
+    if tailored_primary:
+        log(f"[tailor] appended corrective clause for {', '.join(tailored_primary)} (primary)")
+    sys_consensus, tailored_consensus = (None, [])
+    if consensus:
+        sys_consensus, tailored_consensus = tailor_system(args.system, consensus, args.tag,
+                                                           args.no_tailor)
+        if tailored_consensus:
+            log(f"[tailor] appended corrective clause for {', '.join(tailored_consensus)} "
+                "(consensus)")
     out_dir = args.out_dir or (os.path.splitext(args.batch)[0] + "_out")
     os.makedirs(out_dir, exist_ok=True)
     escalate_path = os.path.join(out_dir, "_escalate.txt")
@@ -947,11 +1090,11 @@ def run_batch(args, prompt):
             else:
                 with open(path, "r", errors="replace") as fh:
                     item_prompt = f"{prompt}\n\n--- {base} ---\n{fh.read(24_000)}"
-            text = call_ollama(item_prompt, args.system, temperature, model,
+            text = call_ollama(item_prompt, sys_primary, temperature, model,
                                args.max_tokens, images)
             out_path = os.path.join(out_dir, base + ".out.txt")
             if consensus:
-                text2 = call_ollama(item_prompt, args.system, temperature, consensus,
+                text2 = call_ollama(item_prompt, sys_consensus, temperature, consensus,
                                     args.max_tokens, images)
                 a_path = os.path.join(out_dir, base + ".A.txt")
                 b_path = os.path.join(out_dir, base + ".B.txt")
@@ -976,7 +1119,7 @@ def run_batch(args, prompt):
             else:
                 with open(out_path, "w") as fh:
                     fh.write(text)
-                _witness(item_prompt, args.system, model, text, images, f"batch:{base}")
+                _witness(item_prompt, sys_primary, model, text, images, f"batch:{base}")
             ok += 1  # consensus mode: ok = agreed + escalated (both calls succeeded)
             consec_exit = 0
         except SystemExit:
@@ -1000,6 +1143,8 @@ def run_batch(args, prompt):
            "purpose": _subject(prompt, args.purpose), "tag": args.tag,
            "batch": len(items), "ok": ok, "failed_count": len(failed),
            "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
+           "tailored": tailored_primary or None,
+           "tailored_consensus": tailored_consensus or None,
            "seconds": summary["seconds"],
            # escalations are successes awaiting review — only real failures flip status
            "status": "ok" if not failed else "partial"}
@@ -1025,7 +1170,7 @@ def main():
     ap = argparse.ArgumentParser(description="Query Gemini from the shell.")
     ap.add_argument("prompt", nargs="?", help="Prompt text. If omitted, read from stdin.")
     ap.add_argument("--backend", choices=["gemini", "gemini-cli", "fm", "ollama", "openai"],
-                    default="gemini",
+                    default=None,
                     help="gemini (cloud API, default — files/grounding/JSON) | gemini-cli (drives the "
                          "logged-in Gemini CLI on your OAuth/subscription quota — no API rate limits) | "
                          "fm (Apple on-device, free/offline/private) | ollama (local model, free/unlimited) | "
@@ -1075,8 +1220,33 @@ def main():
     ap.add_argument("--preflight", action="store_true",
                     help="Treat the output as Python code: syntax-check it (no execution) and, on a "
                          "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
+    ap.add_argument("--no-tailor", action="store_true", dest="no_tailor",
+                    help="Skip auto-appended per-model corrective clauses (see MODEL_PROFILES). "
+                         "Route warnings for a known-bad model+tag combo still print.")
     args = ap.parse_args()
     t0 = time.time()
+
+    # Mandatory tagging (2026-07-28): habit alone left 863/915 ledger runs untagged,
+    # which makes them invisible to gap_report and the hebbian router. A memory/SKILL.md
+    # instruction to "always tag" didn't stick — mechanical enforcement does.
+    if not args.tag and not args.list_models:
+        log("ERROR: --tag SHAPE is required on every call (research | doc-format | classify | "
+            "vision-prescreen | long-digest | code-draft | copy-draft | translate | "
+            "subagent-fanout | audio-transcribe | ...). Untagged runs don't feed gap_report or "
+            "the hebbian router. Reuse an existing tag or coin a new one.")
+        sys.exit(2)
+
+    # Resolve the cost-driven local default BEFORE anything else reads args.backend.
+    # Only fires when the caller left both --backend and --model unset — an explicit
+    # choice of either always wins. --search has no local equivalent, so it always
+    # forces cloud regardless of this table.
+    if args.backend is None and args.model is None and not args.search \
+            and args.tag in DEFAULT_LOCAL_FOR_TAG:
+        args.backend = "ollama"
+        args.model = DEFAULT_LOCAL_FOR_TAG[args.tag]
+        log(f"[cost] --tag {args.tag} defaults to local (--backend ollama --model "
+            f"{args.model}, free/unlimited) — pass --backend gemini to override")
+    args.backend = args.backend or "gemini"
 
     if args.consensus and (not args.batch or args.backend != "ollama"):
         log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "
@@ -1136,19 +1306,26 @@ def main():
             sys.exit(2)
         if args.backend == "fm":
             model_eff = "fm"
-            text = call_fm(prompt, args.system, args.temperature)
         elif args.backend == "ollama":
             # vision needs a vision model: auto-pick gemma4 when images are present
             model_eff = args.model or ("gemma4:26b" if images else "qwen3-coder:30b")
-            text = call_ollama(prompt, args.system, args.temperature, model_eff,
-                               args.max_tokens, images)
         elif args.backend == "openai":
             model_eff = args.model or "unset"
-            text = call_openai_compat(prompt, args.system, args.temperature, args.model,
-                                      args.max_tokens, args.base_url)
         else:
             model_eff = args.model or "default"
-            text = call_gemini_cli(prompt, args.system, args.temperature, args.model,
+        sys_eff, tailored = tailor_system(args.system, model_eff, args.tag, args.no_tailor)
+        if tailored:
+            log(f"[tailor] appended corrective clause for {', '.join(tailored)}")
+        if args.backend == "fm":
+            text = call_fm(prompt, sys_eff, args.temperature)
+        elif args.backend == "ollama":
+            text = call_ollama(prompt, sys_eff, args.temperature, model_eff,
+                               args.max_tokens, images)
+        elif args.backend == "openai":
+            text = call_openai_compat(prompt, sys_eff, args.temperature, args.model,
+                                      args.max_tokens, args.base_url)
+        else:
+            text = call_gemini_cli(prompt, sys_eff, args.temperature, args.model,
                                    preflight=args.preflight)
         print(text)
         sys.stdout.flush()
@@ -1156,15 +1333,22 @@ def main():
                  "purpose": _subject(prompt, args.purpose), "tag": args.tag,
                  "files": [os.path.basename(f) for f in args.file] or None,
                  "prompt_chars": len(prompt), "out_chars": len(text),
-                 "images": len(images) or None,
+                 "images": len(images) or None, "tailored": tailored or None,
                  "seconds": round(time.time() - t0, 1), "status": "ok"})
         if args.backend == "ollama":
-            _witness(prompt, args.system, model_eff, text, images, "oneshot")
+            _witness(prompt, sys_eff, model_eff, text, images, "oneshot")
         return
 
     # --- gemini backend (default) ---
     key = api_key()
-    model = ALIASES.get(args.model or "flash", args.model or "flash")
+    default_model = DEFAULT_MODEL_BY_TAG.get(args.tag, "flash")
+    if args.model is None and args.tag in DEFAULT_MODEL_BY_TAG:
+        log(f"[route] --tag {args.tag} defaults to {default_model} "
+            f"(ledger-measured; pass --model to override)")
+    model = ALIASES.get(args.model or default_model, args.model or default_model)
+    sys_eff, tailored = tailor_system(args.system, model, args.tag, args.no_tailor)
+    if tailored:
+        log(f"[tailor] appended corrective clause for {', '.join(tailored)}")
 
     parts = []
     for fp in args.file:
@@ -1177,8 +1361,8 @@ def main():
 
     body = {"contents": [{"role": "user", "parts": parts}]}
 
-    if args.system:
-        body["systemInstruction"] = {"parts": [{"text": args.system}]}
+    if sys_eff:
+        body["systemInstruction"] = {"parts": [{"text": sys_eff}]}
     if args.search:
         body["tools"] = [{"googleSearch": {}}]
 
@@ -1227,6 +1411,7 @@ def main():
              "tokens_prompt": u.get("promptTokenCount"),
              "tokens_out": u.get("candidatesTokenCount"),
              "search": bool(args.search), "files": len(args.file),
+             "tailored": tailored or None,
              "seconds": round(time.time() - t0, 1), "status": "ok"})
     fr = cand.get("finishReason")
     if fr and fr != "STOP":

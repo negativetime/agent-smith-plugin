@@ -87,15 +87,17 @@ LEGACY = {"research": _is_research,
 
 
 def is_benchmark(r):
-    """agent-gym eval traffic, not real delegated work.
+    """agent-gym eval traffic or routing smoke tests, not real delegated work.
 
     The gym drives the same gemini.py, so its evals land in this ledger. Counting
     them as fleet usage overstates delegation and shrinks the apparent gap — the
     error flatters us, which is the worst direction for it to run (2026-07-20:
     6 of the 8 most recent rows were evals). `gym-eval` tags new rows; the project
-    name catches those logged before that tag existed.
+    name catches those logged before that tag existed. `smoke` covers the "say hi"
+    routing checks, which would otherwise pad the research/doc-format lanes with
+    runs that delegated no actual work (2026-07-28).
     """
-    return r.get("tag") == "gym-eval" or r.get("project") == "agent-gym"
+    return r.get("tag") in ("gym-eval", "smoke") or r.get("project") == "agent-gym"
 
 
 def load_ledger():
@@ -129,6 +131,26 @@ def trust_for(tag, rows, verdicts):
         g, b = out.get(r.get("model"), (0, 0))
         out[r.get("model")] = (g + (v["verdict"] == "good"), b + (v["verdict"] == "bad"))
     return out
+
+
+def still_routed(tag, model, rows, verdicts):
+    """True if `tag` work was sent to `model` again AFTER the last bad verdict on it.
+
+    Distinguishes a live misroute (keep warning) from one already closed in code or
+    habit (stop warning). Timestamps are ISO-8601, so string compare is chronological.
+    """
+    last_bad = ""
+    for r in rows:
+        v = verdicts.get((r.get("ts"), r.get("script"), r.get("model")))
+        if not v or v.get("verdict") != "bad":
+            continue
+        if r.get("model") != model or (v.get("tag") or "untagged") != tag:
+            continue
+        last_bad = max(last_bad, r.get("ts") or "")
+    if not last_bad:
+        return True
+    return any(r.get("model") == model and r.get("tag") == tag
+               and (r.get("ts") or "") > last_bad for r in rows)
 
 
 def main():
@@ -206,7 +228,13 @@ def main():
                 mark = "OK" if g and not b else ("BAD" if b and not g else "mixed")
                 bits.append(f"{m} {g}g/{b}b {mark}")
             print(f"     measured   : {'; '.join(bits)}")
-            bad = [m for m, (g, b) in trust.items() if b and not g]
+            # Only flag a misroute that is STILL LIVE. A model can score 0-good on a
+            # shape and then be routed away from in code (gemini.py DEFAULT_MODEL_BY_TAG),
+            # at which point the warning is a permanent false alarm that teaches you to
+            # ignore the report. Live == the shape was actually sent there again after
+            # the verdict that condemned it (2026-07-28).
+            bad = [m for m, (g, b) in trust.items() if b and not g
+                   if still_routed(s["tag"], m, rows, verdicts)]
             if bad:
                 actions.append((0, f"MISROUTED: {s['name']} is being sent to "
                                    f"{', '.join(bad)}, which the ledger scores 0-good. "

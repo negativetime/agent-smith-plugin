@@ -424,6 +424,9 @@ def main():
     ap.add_argument("--max-gen-tokens", type=int, default=MAX_GEN_TOKENS,
                     help="per-turn generation cap (default 1600). Raise for tasks that "
                          "write large single files.")
+    ap.add_argument("--tag", default="app-build", metavar="TASKSHAPE",
+                    help="task-shape label for the ledger / hebbian router "
+                         "(default: app-build).")
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
                          "(measured null result on qwen2.5-coder:14b, 2026-07-01)")
@@ -592,7 +595,7 @@ def main():
         tlog.close()
     print(json.dumps(summary))
     _ledger({"script": "smith_agent", "backend": backend, "model": args.model,
-             "workdir": workdir, "task": task[:120], **summary})
+             "tag": args.tag, "workdir": workdir, "task": task[:120], **summary})
 
 
 if __name__ == "__main__":

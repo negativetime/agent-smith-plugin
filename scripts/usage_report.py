@@ -32,6 +32,20 @@ def is_benchmark(r):
     return r.get("tag") == "gym-eval" or r.get("project") == "agent-gym"
 
 
+def is_reviewable(r):
+    """True for runs a verdict could actually be recorded against.
+
+    Two populations can never be reviewed and only distort the quality stat:
+    pre-2026-07-18 rows (no purpose was stored, so there is nothing to judge
+    against), and `smoke` routing checks like "say hi" that carry no output
+    worth grading. Counting them as 'unreviewed' made the loop look abandoned
+    when the real queue was small (found 2026-07-28).
+    """
+    if r.get("tag") == "smoke":
+        return False
+    return bool(r.get("purpose") or r.get("task") or r.get("tag"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--last", type=int, default=10, help="recent rows to show")
@@ -93,8 +107,16 @@ def main():
     bad = [r for r in rows if (verdicts.get(run_key(r)) or {}).get("verdict") == "bad"]
     if good or bad:
         rate = len(good) / (len(good) + len(bad))
+        # Denominator is the REVIEWABLE population, not every row — legacy and smoke
+        # runs can never be verdicted, so counting them made the queue look hopeless.
+        reviewable = [r for r in rows if is_reviewable(r)]
+        pending = sum(1 for r in reviewable
+                      if not (verdicts.get(run_key(r)) or {}).get("verdict"))
+        unreviewable = len(rows) - len(reviewable)
         print(f"verified: {len(good)} good, {len(bad)} bad "
-              f"({rate:.0%} quality on reviewed), {len(rows)-len(good)-len(bad)} unreviewed")
+              f"({rate:.0%} quality on reviewed), {pending} awaiting verdict"
+              + (f"  [+{unreviewable} unreviewable: pre-2026-07-18 or smoke]"
+                 if unreviewable else ""))
     else:
         print(f"verified: none yet — after reviewing a delegation, run verdict.py good|bad")
     print("by model:")
@@ -177,8 +199,7 @@ def main():
         # is nothing to reconstruct it from. Showing 800 of them buries the handful
         # that ARE actionable, so they're counted and skipped unless asked for.
         if not args.include_legacy:
-            identifiable = [r for r in shown
-                            if r.get("purpose") or r.get("task") or r.get("tag")]
+            identifiable = [r for r in shown if is_reviewable(r)]
             legacy_hidden = len(shown) - len(identifiable)
             shown = identifiable
     else:

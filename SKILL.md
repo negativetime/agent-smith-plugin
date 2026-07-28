@@ -77,28 +77,46 @@ Pure stdlib, runs on macOS/Linux/Windows (`python3` vs `python`; skill dir
 `~/.claude/skills/agent-smith` vs `%USERPROFILE%\.claude\skills\agent-smith`).
 Key: `GEMINI_API_KEY` (fallback `GOOGLE_API_KEY`) in the environment.
 
+**`--tag SHAPE` is REQUIRED on every call** (enforced in code 2026-07-28 — an untagged call
+exits 2 before spending anything). Habit alone left 863/915 runs untagged and therefore
+invisible to `gap_report.py` and the hebbian router. Reuse an existing shape or coin one;
+use `--tag smoke` for throwaway routing checks so they stay out of the review queue.
+
 ```bash
 SKILL=~/.claude/skills/agent-smith
-python3 "$SKILL/scripts/gemini.py" "Explain X in 5 bullets"                       # flash default
-cat spec.txt | python3 "$SKILL/scripts/gemini.py" --model pro "Make a checklist"  # stdin
-python3 "$SKILL/scripts/gemini.py" --search "What's new in Swift?"                # grounded research
-python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize as bullets"       # file ingest
-python3 "$SKILL/scripts/gemini.py" --file inv.pdf --schema s.json "Extract items" # JSON extraction
+python3 "$SKILL/scripts/gemini.py" --tag copy-draft "Explain X in 5 bullets"
+cat spec.txt | python3 "$SKILL/scripts/gemini.py" --tag draft-spec "Make a checklist"
+python3 "$SKILL/scripts/gemini.py" --search --tag research "What's new in Swift?"
+python3 "$SKILL/scripts/gemini.py" --file report.pdf --tag long-digest "Summarize as bullets"
+python3 "$SKILL/scripts/gemini.py" --file inv.pdf --schema s.json --tag classify "Extract items"
 
 # BATCH (local, zero Claude tokens per item): manifest = one path per line;
 # images ride vision, text appends to prompt; per-item .out.txt + ONE JSON summary.
-python3 "$SKILL/scripts/gemini.py" --backend ollama --batch files.txt --out-dir out "Classify: ..."
+python3 "$SKILL/scripts/gemini.py" --backend ollama --batch files.txt --tag classify --out-dir out "Classify: ..."
 
 # CONSENSUS batch (disagreement fires escalation): each item on TWO local models at
 # temp 0; agree -> accept; disagree -> .A/.B files + _escalate.txt queue. SHORT outputs only.
 python3 "$SKILL/scripts/gemini.py" --backend ollama --model llama3.2:3b \
-  --batch records.txt --consensus gpt-oss:20b --out-dir cls "One word: ..."
+  --batch records.txt --consensus gpt-oss:20b --tag classify --out-dir cls "One word: ..."
 ```
 
 Windows: same flags, `python` launcher, `Get-Content` for stdin.
-**Flags:** `--model` · `--system` · `--file` (repeatable) · `--search` · `--json`/`--schema` ·
-`--temperature` · `--max-tokens` · `--thinking-budget N` · `--preflight` (gemini-cli syntax
-check) · `--list-models`. API internals: [references/gemini-api.md](references/gemini-api.md).
+**Flags:** `--tag` (REQUIRED) · `--model` · `--system` · `--file` (repeatable) · `--search` ·
+`--json`/`--schema` · `--temperature` · `--max-tokens` · `--thinking-budget N` ·
+`--preflight` (gemini-cli syntax check) · `--list-models` · `--no-tailor` (below).
+API internals: [references/gemini-api.md](references/gemini-api.md).
+
+**Per-model prompt tailoring (2026-07-26).** `--system` carries TASK framing (role/style);
+`gemini.py` separately auto-appends a MODEL framing clause — a known, measured failure mode
+for whichever model is actually resolved (e.g. gpt-oss:20b → strip reasoning-residue dead
+code before returning; qwen3-vl:4b → flag long digit strings as unverified unless reading a
+crop). Every call through a profiled model gets the fix instead of relying on Claude to
+retype a lane note by hand. Table = `MODEL_PROFILES` in `gemini.py` (evidence-only: add an
+entry after a `verdict.py bad`, not a hunch). `--no-tailor` opts a single call out; a
+`[tailor]` stderr line + `"tailored"` ledger field confirm it fired. `ROUTE_WARNINGS` (not
+suppressed by `--no-tailor`) separately flags a known-bad model+tag combo already called out
+as a Route BLOCK below — a routing decision, not something a prompt clause should paper
+over. Design + verification: [references/model-tailoring-2026-07-26.md](references/model-tailoring-2026-07-26.md).
 
 ## Backends (`--backend`) — default `gemini`, reach for edges
 
@@ -147,6 +165,48 @@ check) · `--list-models`. API internals: [references/gemini-api.md](references/
   (model stuck "Stopping...", requests hang): `kill` the `llama-server` runner PID, or
   restart Ollama.app.
 - Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
+
+## DEFAULT-TO-LOCAL routes — gap report 2026-07-25
+
+**Enforced in code as of 2026-07-27 (cost pass — user wants minimum spend):** `gemini.py`'s
+`DEFAULT_LOCAL_FOR_TAG` table now auto-routes `--tag doc-format|classify|code-draft|
+vision-prescreen|long-digest|subagent-fanout` to the free local model below whenever BOTH
+`--backend` and `--model` are left unset — logs `[cost] --tag X defaults to local`. Passing
+either flag explicitly still wins (e.g. `--backend gemini` forces cloud). `--search` always
+forces cloud (no local web grounding) regardless of tag. Bare `gemini.py "…" --tag SHAPE`
+now costs $0 for these six shapes without having to remember `--backend ollama` by hand —
+reach for the tag alone. Tags below this line without a `DEFAULT_LOCAL_FOR_TAG` entry
+(`translate`, `copy-draft`, `design`, `research`, …) still default to paid cloud — their
+local evidence isn't strong enough yet to force it silently.
+
+Reach for these WITHOUT re-deriving the gap report; each is a measured gap joined with a
+ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
+
+- **Read-only fan-out / grep-and-summarize sweeps** → `--backend ollama --batch`
+  (`--tag subagent-fanout` — must match `gap_report.py`'s `SHAPES` tag exactly, or the run
+  is invisible to the gap report; `fanout-digest` was a stale/wrong tag name here until
+  2026-07-27, never actually used). Biggest untouched vein: 663 Claude-side Agent/Explore
+  calls, **0 delegated**. No verdicts yet — trial route; verdict the first few to build
+  the record.
+- **Long-document digest** (logs, transcripts, CSVs, contracts) → `--backend ollama
+  --model gpt-oss:20b` (131k ctx; 1g/0b) (`--tag long-digest`). ~141M Claude context tokens
+  went to reading long docs; default local first, Claude reads the distilled version.
+- **Screenshot / vision prescreen** → `--backend ollama --model qwen3-vl:4b --file shot.png`
+  (`--tag vision-prescreen`; 3g/0b TRUSTED). ~127M Claude context tokens of screenshots;
+  local first-pass describes, Claude views only flagged shots. Digit-string crop rule applies.
+- **Mechanical code boilerplate from a clear spec** (Codable conformance, enum plumbing,
+  UI-label tables, test scaffolds) → `qwen3-coder:30b` or `gemma4:26b` (`--tag code-draft`).
+  Gym-trusted shape; expect the residency swap (see fleet routing above).
+- **Classification / tag / label batches** → `llama3.2:3b` (`--tag classify`; 1g/0b),
+  `--consensus gpt-oss:20b` when accuracy matters.
+- **Web research** → `--search --tag research`. `gemini.py` now defaults `--tag research`
+  to **pro** automatically when `--model` is omitted (fixed 2026-07-27 — was silently
+  defaulting to flash, which scored 0g/1b, MISROUTED; pro scores 9g/1b). Passing
+  `--model flash` still works but logs a route warning. The remaining gap is volume, not
+  model choice: 2% delegated as of 07-25 — the blocker is habit, not tooling.
+- **Route BLOCK:** `doc-format @ gpt-oss:20b` is 0g/**3b** — do not send doc-format there
+  until it passes an agent-gym task. Use gemini-pro (5-streak, LIGHT REVIEW — first earned
+  tier), or gemma4:26b / qwen3-coder:30b (2g/0b each).
 
 ## Standing offload targets — token audit 2026-07-12
 
@@ -205,9 +265,9 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   are. This joins the ledger against `token_audit.json` (mined from Claude transcripts) and
   splits the result two ways: **UNUSED** (Claude did it while a trusted route sat idle) and
   **MISROUTED** (delegated to a model the ledger scores badly at that shape). Standing
-  measurement 2026-07-19: **web research 2% delegated** — 1,467 Claude calls vs 24 fleet runs
-  while `research @ gemini-pro` holds a 6-good streak at light review; read-only subagent
-  fan-out 0% of 663 Agent spawns. Run it monthly, on gym day, or whenever quota gets tight;
+  measurement (unchanged 07-19 → 07-25): **web research 2% delegated** — 1,467 Claude calls
+  vs 31 fleet runs while `research @ gemini-pro` sits at 9g/1b; read-only subagent fan-out
+  0% of 663 Agent spawns. Ranked routes now live in "DEFAULT-TO-LOCAL routes" above. Run it monthly, on gym day, or whenever quota gets tight;
   `--refresh` re-mines the transcripts first. Caveat it prints itself: tags only exist on runs
   since 2026-07-18, so pre-tag history is recovered by per-shape heuristics and ratios read as
   a floor.
