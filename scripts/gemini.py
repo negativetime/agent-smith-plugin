@@ -666,9 +666,33 @@ def _unreviewed_count(path):
         return None
 
 
-def _ledger(rec):
+def _archive_output(ledger_path, rec, text):
+    """Save a run's output next to the ledger so it can actually be reviewed later.
+
+    The loop demanded a verdict on every run but the tool never stored what to
+    judge — so 58 runs aged into permanently unreviewable (found 2026-07-28).
+    Outputs land in data/outputs/<date>/<ts>-<script>-<model>.txt and the row
+    carries the path. SMITH_NO_ARCHIVE=1 opts out (e.g. sensitive content).
+    """
+    if not text or os.environ.get("SMITH_NO_ARCHIVE") in ("1", "true", "yes"):
+        return None
+    try:
+        ts = rec.get("ts", "")
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{ts}-{rec.get('script')}-{rec.get('model')}")
+        d = os.path.join(os.path.dirname(ledger_path), "outputs", ts[:10] or "undated")
+        os.makedirs(d, exist_ok=True)
+        fp = os.path.join(d, safe[:150] + ".txt")
+        with open(fp, "w") as fh:
+            fh.write(text[:1_000_000])
+        return os.path.relpath(fp, os.path.dirname(ledger_path))
+    except Exception:
+        return None
+
+
+def _ledger(rec, output=None):
     """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
-    Progress tracking only — must never affect the run, so it swallows everything."""
+    Progress tracking only — must never affect the run, so it swallows everything.
+    `output` is the run's answer text; it gets archived for later review."""
     try:
         import datetime
         rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
@@ -677,6 +701,9 @@ def _ledger(rec):
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "data", "usage.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        saved = _archive_output(path, rec, output)
+        if saved:
+            rec["output_file"] = saved
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
         # Only nag on rows that are themselves reviewable — a witness/verdict row
@@ -1334,7 +1361,8 @@ def main():
                  "files": [os.path.basename(f) for f in args.file] or None,
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "images": len(images) or None, "tailored": tailored or None,
-                 "seconds": round(time.time() - t0, 1), "status": "ok"})
+                 "seconds": round(time.time() - t0, 1), "status": "ok"},
+                output=text)
         if args.backend == "ollama":
             _witness(prompt, sys_eff, model_eff, text, images, "oneshot")
         return
@@ -1412,7 +1440,8 @@ def main():
              "tokens_out": u.get("candidatesTokenCount"),
              "search": bool(args.search), "files": len(args.file),
              "tailored": tailored or None,
-             "seconds": round(time.time() - t0, 1), "status": "ok"})
+             "seconds": round(time.time() - t0, 1), "status": "ok"},
+            output=text)
     fr = cand.get("finishReason")
     if fr and fr != "STOP":
         log(f"finishReason: {fr}  (output may be truncated/partial)")

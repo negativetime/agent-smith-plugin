@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 data/usage.jsonl
 data/usage.jsonl.bak-*
+data/outputs/

@@ -24,7 +24,10 @@ LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("verdict", choices=["good", "bad"])
+    ap.add_argument("verdict", choices=["good", "bad", "stale"],
+                    help="good|bad grade the output; stale = the output no longer exists "
+                         "to judge (pre-archive run, deleted workdir), so it leaves the "
+                         "queue WITHOUT polluting the routing weights.")
     ap.add_argument("note", nargs="?", default="", help="why (required for bad)")
     ap.add_argument("--model", help="target the most recent run of this model")
     ap.add_argument("--script", choices=["gemini", "smith_agent", "transcribe"],
@@ -85,6 +88,9 @@ def main():
     if args.verdict == "bad":
         print("-> feed it back: this task shape deserves a regression test "
               "before you delegate it again.")
+    if args.verdict == "stale":
+        print("-> not a grade: no output survives for this run, so it counts toward "
+              "neither good nor bad. Runs from 2026-07-28 on are archived and reviewable.")
 
 
 if __name__ == "__main__":

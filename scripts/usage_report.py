@@ -112,9 +112,12 @@ def main():
         reviewable = [r for r in rows if is_reviewable(r)]
         pending = sum(1 for r in reviewable
                       if not (verdicts.get(run_key(r)) or {}).get("verdict"))
+        stale = sum(1 for r in rows
+                    if (verdicts.get(run_key(r)) or {}).get("verdict") == "stale")
         unreviewable = len(rows) - len(reviewable)
         print(f"verified: {len(good)} good, {len(bad)} bad "
               f"({rate:.0%} quality on reviewed), {pending} awaiting verdict"
+              + (f", {stale} stale (output not retained)" if stale else "")
               + (f"  [+{unreviewable} unreviewable: pre-2026-07-18 or smoke]"
                  if unreviewable else ""))
     else:

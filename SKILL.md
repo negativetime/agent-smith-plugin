@@ -255,9 +255,21 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   is the review queue — coverage was ~4% (799/887 unverdicted), so the routing weights rest on
   a thin sample; verdict a few whenever you're already in the ledger.
 - **Verdicts:** `ok` = completed, not correct. After review:
-  `verdict.py good|bad "why" [--tag TASKTYPE] [--model M] [--script S]`. Tags feed the
+  `verdict.py good|bad|stale "why" [--tag TASKTYPE] [--model M] [--script S]`. Tags feed the
   report's **hebbian routing weights**: per (task-shape, model) quality + streak → review
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
+  `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
+  the queue WITHOUT counting as good or bad.
+- **Outputs are archived (2026-07-28).** Every run writes its answer to
+  `data/outputs/<date>/<ts>-<script>-<model>.txt` and the ledger row carries `output_file`.
+  Before this, the loop demanded a verdict on every run while the tool stored nothing to
+  judge — 17 runs aged into permanently ungradeable. `SMITH_NO_ARCHIVE=1` opts out.
+- **The WebSearch nudge (2026-07-28).** `scripts/research_nudge.py` is a non-blocking
+  `PreToolUse` hook on `WebSearch` (wired in `~/.claude/settings.json`). It stays quiet for
+  the first 2 searches of a session, then prints the exact `--search --tag research` command
+  on the 3rd and every 4th after. Tunable via `SMITH_NUDGE_AFTER` / `SMITH_NUDGE_EVERY`.
+  Verified live: `hookSpecificOutput.additionalContext` DOES reach Claude on `PreToolUse`
+  (the docs are ambiguous; this was tested, not assumed) and the search still runs.
 - **Feed failures back:** every `bad` = a ready-made regression test → new agent-gym task
   before that shape is delegated again.
 - **Find the gaps — `python3 "$SKILL/scripts/gap_report.py"`.** The ledger only sees work that
