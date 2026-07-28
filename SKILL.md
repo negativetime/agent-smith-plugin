@@ -166,18 +166,30 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
   restart Ollama.app.
 - Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
 
-## DEFAULT-TO-LOCAL routes — gap report 2026-07-25
+## DEFAULT-TO-LOCAL / DEFAULT-TO-PAID routes — gap report 2026-07-25, updated 2026-07-28
 
 **Enforced in code as of 2026-07-27 (cost pass — user wants minimum spend):** `gemini.py`'s
-`DEFAULT_LOCAL_FOR_TAG` table now auto-routes `--tag doc-format|classify|code-draft|
-vision-prescreen|long-digest|subagent-fanout` to the free local model below whenever BOTH
-`--backend` and `--model` are left unset — logs `[cost] --tag X defaults to local`. Passing
-either flag explicitly still wins (e.g. `--backend gemini` forces cloud). `--search` always
-forces cloud (no local web grounding) regardless of tag. Bare `gemini.py "…" --tag SHAPE`
-now costs $0 for these six shapes without having to remember `--backend ollama` by hand —
-reach for the tag alone. Tags below this line without a `DEFAULT_LOCAL_FOR_TAG` entry
-(`translate`, `copy-draft`, `design`, `research`, …) still default to paid cloud — their
-local evidence isn't strong enough yet to force it silently.
+`DEFAULT_LOCAL_FOR_TAG` table auto-routes `--tag doc-format|classify|vision-prescreen|
+long-digest|subagent-fanout` to the free local model below whenever BOTH `--backend` and
+`--model` are left unset — logs `[cost] --tag X defaults to local`. Passing either flag
+explicitly still wins (e.g. `--backend gemini` forces cloud). `--search` always forces cloud
+(no local web grounding) regardless of tag.
+
+**`code-draft` moved to a NEW `DEFAULT_PAID_FOR_TAG` table as of 2026-07-28** — bare
+`--tag code-draft` now routes to the z.ai **GLM Coding Plan** (`glm-5.2`,
+`https://api.z.ai/api/coding/paas/v4`, needs `ZAI_API_KEY`), logging `[paid] --tag
+code-draft defaults to the z.ai GLM Coding Plan`. This is a flat $18/mo subscription — the
+marginal cost of one more call is $0, so it's checked BEFORE the free-local table and wins
+where both would apply. Justification: agent-gym swept it 27/27 the same day (all 5 agentic
+tasks incl. native tool-calling), it beat the local TRUSTED baseline's wall-clock on 4/5
+agentic tasks, AND the user explicitly asked to prioritize using a resource already paid
+for. `--backend ollama --model qwen3-coder:30b` (or gemma4:26b) still works as an explicit
+override — local stays free/private, just no longer the silent default for this one tag.
+
+Tags below this line with neither a `DEFAULT_PAID_FOR_TAG` nor `DEFAULT_LOCAL_FOR_TAG` entry
+(`translate`, `copy-draft`, `design`, `research`, …) still default to the pay-per-token
+Gemini cloud API — their evidence isn't strong enough yet to force a different route
+silently.
 
 Reach for these WITHOUT re-deriving the gap report; each is a measured gap joined with a
 ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
@@ -195,8 +207,10 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   (`--tag vision-prescreen`; 3g/0b TRUSTED). ~127M Claude context tokens of screenshots;
   local first-pass describes, Claude views only flagged shots. Digit-string crop rule applies.
 - **Mechanical code boilerplate from a clear spec** (Codable conformance, enum plumbing,
-  UI-label tables, test scaffolds) → `qwen3-coder:30b` or `gemma4:26b` (`--tag code-draft`).
-  Gym-trusted shape; expect the residency swap (see fleet routing above).
+  UI-label tables, test scaffolds) → bare `--tag code-draft` now defaults to the z.ai GLM
+  Coding Plan (`glm-5.2`, see the DEFAULT-TO-PAID section above) — gym-swept 27/27
+  2026-07-28, no residency swap. `--backend ollama --model qwen3-coder:30b` (or
+  `gemma4:26b`) still available as an explicit local/private override.
 - **Classification / tag / label batches** → `llama3.2:3b` (`--tag classify`; 1g/0b),
   `--consensus gpt-oss:20b` when accuracy matters.
 - **Web research** → `--search --tag research`. `gemini.py` now defaults `--tag research`
@@ -221,9 +235,19 @@ Re-run the audit: `python3 /Users/joshualangberg/Python/docs/token_audit.py`.
 
 ## Agentic offload — smith_agent.py (sandboxed tool loop)
 
-Multi-step repo tasks (fix a bug, add a feature, build a small app):
+Multi-step repo tasks (fix a bug, add a feature, build a small app). `--backend`/`--model`
+are explicit flags every time (smith_agent.py isn't tag-routed like gemini.py), so this
+is a documented DEFAULT PRACTICE, not something the tool enforces — reach for it by hand:
 
 ```bash
+# DEFAULT since 2026-07-28: z.ai GLM Coding Plan — gym-swept 27/27 incl. APP-BUILD 3/3
+# and CODE-EDIT 2/2 at L3 (real tool loop), beat local gpt-oss:20b's wall-clock on 4/5
+# agentic tasks, flat-rate subscription (marginal cost $0). Needs ZAI_API_KEY.
+python3 "$SKILL/scripts/smith_agent.py" --backend openai \
+  --base-url https://api.z.ai/api/coding/paas/v4 --model glm-5.2 \
+  --api-key-env ZAI_API_KEY --workdir /path/to/SCRATCH --prompt-file task.txt
+
+# local/private fallback (free, no data leaves the machine):
 python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
   --workdir /path/to/SCRATCH --prompt-file task.txt
 # big single-file writes: add --max-gen-tokens 4096 (default 1600 truncates them)

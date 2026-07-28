@@ -62,10 +62,24 @@ DEFAULT_MODEL_BY_TAG = {
 DEFAULT_LOCAL_FOR_TAG = {
     "doc-format": "qwen3-coder:30b",       # 2g/0b (gpt-oss:20b is BLOCKED here, 0g/3b — don't use it)
     "classify": "llama3.2:3b",             # 1g/0b
-    "code-draft": "qwen3-coder:30b",       # gym-trusted
     "vision-prescreen": "qwen3-vl:4b",     # 3g/0b, TRUSTED
     "long-digest": "gpt-oss:20b",          # 1g/0b; also the resident model — zero swap cost
     "subagent-fanout": "gpt-oss:20b",      # 1g/0b (2026-07-27 smoke test)
+}
+
+# Paid-subscription default: tags with a MEASURED-good FLAT-RATE cloud lane — the z.ai
+# GLM Coding Plan (subscribed 2026-07-28, $18/mo flat; the marginal cost of one more
+# call is $0, same shape as a local model but faster on the gym's agentic tasks) —
+# default HERE instead of local, when the caller left both --backend and --model unset.
+# code-draft moved out of DEFAULT_LOCAL_FOR_TAG to make room; every other local-routed
+# tag is untouched. Source: agent-gym 2026-07-28 full-suite sweep (27/27, all 5 agentic
+# tasks incl. native tool-calling, beat the local TRUSTED baseline's wall-clock on 4/5)
+# + explicit user direction ("I paid for it, I want to use it... reduce tokens for
+# Claude") — that intent is itself the routing justification here, same as any other
+# measured-good/bad split. Checked BEFORE DEFAULT_LOCAL_FOR_TAG so it takes priority
+# for any tag listed in both.
+DEFAULT_PAID_FOR_TAG = {
+    "code-draft": {"model": "glm-5.2", "base_url": "https://api.z.ai/api/coding/paas/v4"},
 }
 
 # --- Per-model prompt tailoring --------------------------------------------------
@@ -727,6 +741,10 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
                     "ollama": "http://localhost:11434/v1",
                     # z.ai (Zhipu) — OpenAI-compatible. Verified 2026-07-28.
                     "zai": "https://api.z.ai/api/paas/v4",
+                    # z.ai GLM Coding Plan (subscribed 2026-07-28, $18/mo flat) — separate
+                    # endpoint, separate quota from the pay-per-token "zai" alias above.
+                    # ZAI_API_KEY authenticates both (same account key, per z.ai docs).
+                    "zai-coding": "https://api.z.ai/api/coding/paas/v4",
                     # Cloudflare Workers AI — needs CF_ACCOUNT_ID (32-hex) in the env.
                     "cloudflare": "https://api.cloudflare.com/client/v4/accounts/"
                                   + (os.environ.get("CF_ACCOUNT_ID") or "MISSING_CF_ACCOUNT_ID")
@@ -1294,11 +1312,21 @@ def main():
             "the hebbian router. Reuse an existing tag or coin a new one.")
         sys.exit(2)
 
-    # Resolve the cost-driven local default BEFORE anything else reads args.backend.
-    # Only fires when the caller left both --backend and --model unset — an explicit
-    # choice of either always wins. --search has no local equivalent, so it always
-    # forces cloud regardless of this table.
+    # Resolve the cost-driven defaults BEFORE anything else reads args.backend. Only
+    # fires when the caller left both --backend and --model unset — an explicit choice
+    # of either always wins. --search has no local/subscription equivalent, so it
+    # always forces cloud regardless of either table. Paid-subscription checked first:
+    # it beat the local baseline in the gym, so it wins the tags it covers.
     if args.backend is None and args.model is None and not args.search \
+            and args.tag in DEFAULT_PAID_FOR_TAG:
+        cfg = DEFAULT_PAID_FOR_TAG[args.tag]
+        args.backend = "openai"
+        args.base_url = cfg["base_url"]
+        args.model = cfg["model"]
+        log(f"[paid] --tag {args.tag} defaults to the z.ai GLM Coding Plan "
+            f"(--backend openai --model {args.model}) — flat-rate subscription, "
+            f"already paid for, marginal cost $0 — pass --backend/--model to override")
+    elif args.backend is None and args.model is None and not args.search \
             and args.tag in DEFAULT_LOCAL_FOR_TAG:
         args.backend = "ollama"
         args.model = DEFAULT_LOCAL_FOR_TAG[args.tag]

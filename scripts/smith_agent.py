@@ -352,11 +352,19 @@ def chat_gemini(model, contents, system):
     raise last_exc
 
 
-def chat_openai(model, messages, base_url, tools=True):
-    """OpenAI-compatible chat (e.g. mlx_lm server, LM Studio). Sends native tool
-    schemas like the ollama backend when `tools`; the JSON-fallback protocol
-    (parse_fallback_calls/NUDGE) still applies underneath if the model ignores
-    them and answers in prose instead (e.g. gpt-oss's own channel format)."""
+def chat_openai(model, messages, base_url, tools=True, api_key=None,
+                completions_path="/v1/chat/completions"):
+    """OpenAI-compatible chat (e.g. mlx_lm server, LM Studio, or an authenticated
+    cloud host like z.ai). Sends native tool schemas like the ollama backend when
+    `tools`; the JSON-fallback protocol (parse_fallback_calls/NUDGE) still applies
+    underneath if the model ignores them and answers in prose instead (e.g.
+    gpt-oss's own channel format).
+
+    api_key defaults to the literal string "local" (unauthenticated local servers
+    ignore it) — pass a real key for a cloud host. completions_path overrides the
+    default "/v1/chat/completions" suffix; not every OpenAI-compatible host follows
+    that convention (found 2026-07-28: z.ai's Coding Plan endpoint is base_url +
+    "/chat/completions", no "/v1" segment — the hardcoded default 404s there)."""
     clean = []
     for m in messages:
         role = m.get("role")
@@ -372,10 +380,10 @@ def chat_openai(model, messages, base_url, tools=True):
                "max_tokens": MAX_GEN_TOKENS}
     if tools:
         payload["tools"] = TOOLS
-    req = urllib.request.Request(base_url.rstrip("/") + "/v1/chat/completions",
+    req = urllib.request.Request(base_url.rstrip("/") + completions_path,
                                  json.dumps(payload).encode(),
                                  {"Content-Type": "application/json",
-                                  "Authorization": "Bearer local"})
+                                  "Authorization": f"Bearer {api_key or 'local'}"})
     with urllib.request.urlopen(req, timeout=600) as r:
         resp = json.load(r)
     msg = resp["choices"][0]["message"]
@@ -419,7 +427,15 @@ def main():
     ap.add_argument("--num-ctx", type=int, default=32768)
     ap.add_argument("--backend", choices=["ollama", "gemini", "openai"], default="ollama")
     ap.add_argument("--base-url", default="http://localhost:8080",
-                    help="openai backend server (e.g. mlx_lm server)")
+                    help="openai backend server (e.g. mlx_lm server, or a cloud host)")
+    ap.add_argument("--api-key-env", default=None,
+                    help="env var holding a Bearer token for the openai backend "
+                         "(e.g. ZAI_API_KEY); omitted = 'local' for unauthenticated "
+                         "local servers")
+    ap.add_argument("--completions-path", default="/v1/chat/completions",
+                    help="path appended to --base-url for the openai backend. Default "
+                         "matches mlx_lm/LM Studio; override for hosts that don't follow "
+                         "the /v1/chat/completions convention (e.g. z.ai: /chat/completions)")
     ap.add_argument("--transcript", default=None)
     ap.add_argument("--max-gen-tokens", type=int, default=MAX_GEN_TOKENS,
                     help="per-turn generation cap (default 1600). Raise for tasks that "
@@ -448,6 +464,7 @@ def main():
             tlog.flush()
 
     backend = args.backend
+    api_key = os.environ.get(args.api_key_env) if args.api_key_env else None
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": task}]        # ollama history
     contents = [{"role": "user", "parts": [{"text": task}]}]  # gemini history
@@ -472,7 +489,8 @@ def main():
                 contents.append({"role": "model", "parts": parts or [{"text": ""}]})
                 msg = gemini_parts_to_msg(parts)
             elif backend == "openai":
-                msg = chat_openai(args.model, messages, args.base_url, tools=native_ok)
+                msg = chat_openai(args.model, messages, args.base_url, tools=native_ok,
+                                  api_key=api_key, completions_path=args.completions_path)
                 messages.append(msg)
             else:
                 resp = chat(args.model, messages, args.num_ctx, tools=native_ok)
