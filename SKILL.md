@@ -312,6 +312,13 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   python3 "$SKILL/scripts/gemini.py" --backend openai --base-url zai \
     --model glm-4.5-flash --max-tokens 3000 --tag code-draft "..."
   ```
+  **Cloudflare token gotcha (cost a wrong diagnosis 2026-07-28).** Modern CF credentials
+  carry a prefix + CRC32 suffix: `cfk_` user API key · `cfut_` user API token ·
+  **`cfat_` ACCOUNT-OWNED API token**. An account-owned token **does not verify at
+  `/user/tokens/verify`** — that endpoint answers `1000 Invalid API Token`, which reads
+  exactly like a bad credential and is not. Use
+  `GET /accounts/$CF_ACCOUNT_ID/tokens/verify` instead. Also: `wrangler whoami` prints the
+  **account ID**; a *member ID* is also 32-hex and is NOT interchangeable.
   **z.ai reality check (measured 2026-07-28, NOT the marketing claim):** the account's
   `/models` lists `glm-4.5 4.5-air 4.6 4.7 5 5-turbo 5.1 5.2`, but every one of those
   returns **HTTP 429 "Insufficient balance or no resource package"**. Only
