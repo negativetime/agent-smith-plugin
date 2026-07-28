@@ -41,6 +41,100 @@ ALIASES = {
     "flash-lite": "gemini-flash-lite-latest",
 }
 
+# Tag-based default overrides for the gemini (cloud API) backend: when --model is
+# omitted, the tag can pick a better default than the hardcoded "flash" fallback.
+# Source of truth: usage ledger verdicts (see ROUTE_WARNINGS below and
+# references/measured-results.md). Only add an entry once a tag has a measured,
+# lopsided good/bad split against the plain "flash" default — this is a routing
+# fix, not a place to guess.
+#   research: flash scored 0 good / 1 bad (MISROUTED); pro scored 9 good / 1 bad.
+DEFAULT_MODEL_BY_TAG = {
+    "research": "pro",
+}
+
+# Cost-driven default: tags with a MEASURED-good local (free/unlimited) model default to
+# --backend ollama instead of the paid cloud API, when the caller left BOTH --backend and
+# --model unset (an explicit --backend or --model always wins — this only resolves the
+# "just a tag + prompt" case). --search forces cloud regardless (web grounding has no local
+# equivalent), so it's never in this table. Source: usage ledger verdicts (usage_report.py)
+# + SKILL.md gym-trust notes as of 2026-07-27. Add a tag here only once it has a real
+# good/bad split backing it — this is a routing fix, not a place to guess.
+DEFAULT_LOCAL_FOR_TAG = {
+    "doc-format": "qwen3-coder:30b",       # 2g/0b (gpt-oss:20b is BLOCKED here, 0g/3b — don't use it)
+    "classify": "llama3.2:3b",             # 1g/0b
+    "code-draft": "qwen3-coder:30b",       # gym-trusted
+    "vision-prescreen": "qwen3-vl:4b",     # 3g/0b, TRUSTED
+    "long-digest": "gpt-oss:20b",          # 1g/0b; also the resident model — zero swap cost
+    "subagent-fanout": "gpt-oss:20b",      # 1g/0b (2026-07-27 smoke test)
+}
+
+# --- Per-model prompt tailoring --------------------------------------------------
+#
+# --system carries TASK framing (role/style/constraints); this carries MODEL
+# framing (known, MEASURED failure modes for that specific model, so the fix
+# lands on every call instead of only the ones where Claude remembers to type
+# it in by hand). Source: references/measured-results.md + SKILL.md lane notes.
+# Evidence-only: add a clause after a verdict.py bad, not on a hunch. Keep each
+# entry to one sentence — extra instruction text competes for attention in a
+# 3-20B model's context and can backfire on the small/fast ones.
+MODEL_PROFILES = {
+    "gpt-oss:20b": (
+        "Before returning, strip debug prints, dead or commented-out branches, and any "
+        "comment or docstring claiming behavior the code doesn't actually implement "
+        "(measured failure mode: this exact residue cost this model a blinded design "
+        "review against gemma4:26b)."
+    ),
+    "gemma4:26b": (
+        "If reading a tall or full-page screenshot, do not invent small text you can't "
+        "clearly resolve — say 'illegible' rather than fabricate a plausible-looking "
+        "label, price, or brand name (measured: this model confidently invented text on "
+        "tall captures while getting large headings exactly right)."
+    ),
+    "qwen3-vl:4b": (
+        "For any exact digit string 6+ characters long (ID, serial, phone number, key), "
+        "flag it as unverified rather than transcribing it with full confidence unless "
+        "you're reading a tight crop of just that field — full-window shots have dropped "
+        "a leading digit before."
+    ),
+    "agents-a1": (
+        "Do not let except/catch blocks silently swallow real errors such as validation "
+        "failures — a measured miss here let a failing validator pass silently instead "
+        "of raising."
+    ),
+}
+
+# Known (model, tag) combos that scored badly enough to be called out as a routing
+# block in SKILL.md. This is a WARNING, not a silent override: "use a different model"
+# is a decision that belongs in SKILL.md/Claude's hands, not something to patch over
+# with a prompt clause here. Sourced from gap_report.py + verdict history.
+ROUTE_WARNINGS = {
+    ("gpt-oss:20b", "doc-format"): (
+        "gpt-oss:20b scored 0 good / 3 bad on doc-format in the usage ledger — SKILL.md "
+        "recommends gemini-pro or gemma4:26b for this shape instead."
+    ),
+    ("gemini-flash-latest", "research"): (
+        "flash scored 0 good / 1 bad on research in the usage ledger (MISROUTED) — "
+        "SKILL.md recommends pro for research."
+    ),
+}
+
+
+def tailor_system(system, model, tag, no_tailor=False):
+    """Return (effective_system, applied_keys): --system with any matching per-model
+    corrective clause appended, plus the list of model keys that fired (empty if
+    none/--no-tailor). Also logs a one-line stderr warning for a known-bad
+    (model, tag) route, independent of --no-tailor — that's a routing decision, not
+    a prompt fix, so it isn't suppressed by disabling tailoring."""
+    if tag and (model, tag) in ROUTE_WARNINGS:
+        log(f"WARNING: [route] {ROUTE_WARNINGS[(model, tag)]}")
+    if no_tailor:
+        return system, []
+    clause = MODEL_PROFILES.get(model)
+    if not clause:
+        return system, []
+    effective = f"{system}\n\n{clause}" if system else clause
+    return effective, [model]
+
 
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
@@ -52,6 +146,11 @@ def api_key():
         log("ERROR: GEMINI_API_KEY is not set. Ask the user to export it, then retry.")
         sys.exit(2)
     return k
+
+
+# chat-generation HTTP ceiling; local thinking models (qwen3.6) can exceed 600s on
+# one-shots — the gym raises this via env for scout runs
+GEN_HTTP_TIMEOUT = int(os.environ.get("SMITH_GEN_TIMEOUT", "600"))
 
 
 def http(url, method="GET", data=None, headers=None, timeout=300):
@@ -243,13 +342,27 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
         opts["temperature"] = temperature
     if max_tokens is not None:
         opts["num_predict"] = max_tokens
+    # Auto-size the context window: Ollama SILENTLY truncates the prompt to the server
+    # default (~32k here) — long digests would lose their head without warning. Estimate
+    # conservatively at 3 chars/token (markdown/code measures ~3.4; prose ~4) + output
+    # headroom, round up to a power-of-two step, cap at 131072 (gpt-oss:20b native;
+    # measured 2026-07-12: KV cost at 131k is negligible on MXFP4 MoE, 3/3 needle recall
+    # at 52k tokens).
+    est = len(prompt) // 3 + (len(system) // 3 if system else 0) + (max_tokens or 4096) + 512
+    if est > 8192:
+        ctx = 16384
+        while ctx < est and ctx < 131072:
+            ctx *= 2
+        opts["num_ctx"] = min(ctx, 131072)
+        if est > 131072:
+            log(f"WARNING: input ~{est} est. tokens exceeds the 131072 num_ctx cap — head will truncate. Split the input or use --backend gemini (1M context).")
     if opts:
         body["options"] = opts
     req = urllib.request.Request("http://localhost:11434/api/chat", method="POST",
                                  data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as r:
+        with urllib.request.urlopen(req, timeout=GEN_HTTP_TIMEOUT) as r:
             resp = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         msg = e.read().decode("utf-8", "replace")
@@ -500,12 +613,34 @@ def call_gemini_cli(prompt, system, temperature, model, preflight=False):
     return answer
 
 
+def _subject(prompt, explicit=None, limit=160):
+    """Derive a human-readable 'what was this for' line for the ledger.
+
+    The ledger used to record only size/speed/model, so 887 runs were
+    indistinguishable after the fact and nothing could be reviewed or routed on
+    purpose (found 2026-07-18). An explicit --purpose wins; otherwise take the
+    first substantive line of the prompt, which in practice reads like a task
+    title. Set SMITH_LOG_PROMPTS=0 to record only explicit purposes.
+    """
+    if explicit:
+        return explicit[:limit]
+    if os.environ.get("SMITH_LOG_PROMPTS", "1") in ("0", "false", "no"):
+        return None
+    for line in (prompt or "").splitlines():
+        line = " ".join(line.split())
+        # Skip fences/markup-only lines that carry no meaning as a title.
+        if len(line) > 12 and not line.startswith(("```", "#", "<", "-", "*", "|")):
+            return line[:limit]
+    return " ".join((prompt or "").split())[:limit] or None
+
+
 def _ledger(rec):
     """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
     Progress tracking only — must never affect the run, so it swallows everything."""
     try:
         import datetime
         rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        rec.setdefault("project", os.path.basename(os.getcwd()) or None)
         path = os.environ.get("SMITH_LEDGER") or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "data", "usage.jsonl")
@@ -663,10 +798,170 @@ def _witness(prompt, system, primary_model, primary_text, images, context):
         pass
 
 
+def _strip_fences(text):
+    """Drop a wrapping markdown code fence. Whether a model wraps its answer in
+    ```python is a formatting habit, not a disagreement."""
+    return _split_fence(text)[0]
+
+
+def _split_fence(text):
+    """(body, language_tag_or_None). The fence's tag is the most reliable
+    language signal available, so it is captured rather than discarded."""
+    t = (text or "").strip()
+    m = re.match(r"^```([a-zA-Z0-9_.+-]*)[ \t]*\r?\n(.*?)```\s*$", t, re.DOTALL)
+    if not m:
+        return t, None
+    return m.group(2).strip(), (m.group(1).strip().lower() or None)
+
+
+# Fence tag -> tree-sitter grammar name. Only the languages this fleet actually
+# drafts; the pack ships 306, but guessing beyond what we use buys nothing.
+_TS_LANGS = {
+    "swift": "swift", "js": "javascript", "javascript": "javascript",
+    "jsx": "javascript", "ts": "typescript", "typescript": "typescript",
+    "tsx": "tsx", "go": "go", "rust": "rust", "rs": "rust", "java": "java",
+    "c": "c", "cpp": "cpp", "c++": "cpp", "objc": "objc", "kotlin": "kotlin",
+    "ruby": "ruby", "rb": "ruby", "php": "php", "bash": "bash", "sh": "bash",
+    "zsh": "bash", "html": "html", "css": "css", "json": "json",
+    "yaml": "yaml", "yml": "yaml", "toml": "toml", "sql": "sql",
+    "dockerfile": "dockerfile", "lua": "lua", "scala": "scala",
+}
+# Tried in order when there is no fence tag. Deliberately short: each attempt
+# is a full parse, and a wrong-language parse must be REJECTED (below), not
+# silently accepted.
+_TS_SNIFF = ("swift", "typescript", "javascript", "go", "rust", "json", "yaml")
+
+# Delimiters carrying no meaning beyond what the tree shape already encodes.
+# Everything else anonymous (operators, keywords) IS meaning and is kept.
+_TS_PUNCT = frozenset({";", ",", "{", "}", "(", ")", "[", "]", ":", "\n"})
+
+
+def _ts_skeleton(text, lang_tag=None):
+    """Structural fingerprint of NON-Python source via tree-sitter, or None.
+
+    Python has a stdlib AST and needs no dependency, so it is handled by
+    _py_skeleton. Everything else previously fell through to exact-match, which
+    is the bug that pinned the witness at 18% agreement — a reformatted Swift
+    draft or a moved JS semicolon read as drift. The fleet drafts Swift,
+    TypeScript, YAML and Dockerfiles routinely, so that fallback covered real
+    traffic (found 2026-07-20).
+
+    tree-sitter is OPTIONAL. agent-smith's zero-dependency guarantee holds: if
+    the packages are absent this returns None and behaviour is exactly what it
+    was. Enable with:  pip install tree-sitter tree-sitter-language-pack
+    """
+    if not (text or "").strip():
+        return None
+    try:
+        from tree_sitter_language_pack import get_parser
+    except Exception:  # noqa: BLE001 — absent/broken dep must never matter
+        return None
+
+    names = ([_TS_LANGS[lang_tag]] if lang_tag and lang_tag in _TS_LANGS
+             else list(_TS_SNIFF))
+    src = text.encode("utf-8", "replace")
+    for name in names:
+        try:
+            tree = get_parser(name).parse(src)
+        except Exception:  # noqa: BLE001 — grammar missing for this language
+            continue
+        # tree-sitter is ERROR-TOLERANT: it returns a tree for nonsense input
+        # rather than raising. Without this check two unrelated blobs could
+        # both "parse" and compare structurally similar, so a tree carrying any
+        # error is treated as not-this-language.
+        if tree.root_node.has_error:
+            continue
+        out = []
+
+        def walk(node):
+            t = node.type
+            if "comment" in t:  # prose, not structure
+                return
+            if node.child_count == 0:
+                # Leaf: keep its text so renamed identifiers still count as drift.
+                out.append(f"{t}:{node.text.decode('utf-8', 'replace')}")
+                return
+            out.append(t)
+            # ALL children, not just named ones: operators (+ - == &&) and
+            # keywords (const/let/func) are ANONYMOUS nodes in tree-sitter, so
+            # walking named_children silently dropped them and made `a + b`
+            # compare equal to `a - b` — a false AGREEMENT, which is the
+            # dangerous direction for a drift sensor. Pure delimiters stay
+            # excluded: they carry no meaning the tree shape doesn't already
+            # encode, and counting `;` would resurrect the semicolon false drift.
+            for ch in node.children:
+                if ch.is_named:
+                    walk(ch)
+                elif ch.type not in _TS_PUNCT:
+                    out.append(f"op:{ch.type}")
+
+        try:
+            walk(tree.root_node)
+        except RecursionError:
+            return None
+        return f"{name}\n" + "\n".join(out)
+    return None
+
+
+def _py_skeleton(text):
+    """Structural fingerprint of Python source, or None if it isn't parseable.
+
+    Normalizes away the things two models legitimately differ on without either
+    being wrong: formatting, comments, docstrings, and type annotations. What
+    survives is the actual structure — names, control flow, operations.
+    """
+    try:
+        import ast
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return None
+    try:
+        import ast
+        for node in ast.walk(tree):
+            # Type hints are style, not behavior.
+            if isinstance(node, ast.arg):
+                node.annotation = None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                node.returns = None
+            if isinstance(node, ast.AnnAssign):
+                node.annotation = ast.Name(id="_", ctx=ast.Load())
+            # Docstrings are prose; two correct answers word them differently.
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)) and getattr(node, "body", None):
+                first = node.body[0]
+                if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str) and len(node.body) > 1):
+                    node.body = node.body[1:]
+        return ast.dump(tree, annotate_fields=True, include_attributes=False)
+    except Exception:  # noqa: BLE001 — a sensor must never raise
+        return None
+
+
 def _outputs_agree(a, b):
-    """True when two model outputs agree after normalization. Exact-match voting —
-    only meaningful for SHORT structured outputs (classify/extract), not prose."""
-    return _normalize_output(a) == _normalize_output(b)
+    """True when two model outputs agree.
+
+    Exact-match after normalization is right for the SHORT structured outputs
+    this was built for (classify/extract). It is WRONG for code: it was applied
+    to one-shot code generation and reported drift for markdown fences and type
+    hints, so the sensor sat at 18% agreement, every model's trust streak stayed
+    pinned at 0, and the FSRS interval never grew (found 2026-07-18). When both
+    sides are parseable Python, compare structure instead.
+    """
+    a_s, a_lang = _split_fence(a)
+    b_s, b_lang = _split_fence(b)
+    if _normalize_output(a_s) == _normalize_output(b_s):
+        return True
+    ska, skb = _py_skeleton(a_s), _py_skeleton(b_s)
+    if ska is not None and skb is not None:
+        return ska == skb
+    # Non-Python code: same structural comparison via tree-sitter when it is
+    # installed. Falls through to the old exact-match result when it is not, so
+    # the zero-dependency path is unchanged.
+    tsa = _ts_skeleton(a_s, a_lang or b_lang)
+    tsb = _ts_skeleton(b_s, b_lang or a_lang)
+    if tsa is not None and tsb is not None:
+        return tsa == tsb
+    return False
 
 
 def run_batch(args, prompt):
@@ -723,6 +1018,16 @@ def run_batch(args, prompt):
         if any_img:
             log(f"note: manifest contains images — MODEL2 ({consensus}) must be a vision "
                 "model, or its votes will be silent garbage.")
+    sys_primary, tailored_primary = tailor_system(args.system, model, args.tag, args.no_tailor)
+    if tailored_primary:
+        log(f"[tailor] appended corrective clause for {', '.join(tailored_primary)} (primary)")
+    sys_consensus, tailored_consensus = (None, [])
+    if consensus:
+        sys_consensus, tailored_consensus = tailor_system(args.system, consensus, args.tag,
+                                                           args.no_tailor)
+        if tailored_consensus:
+            log(f"[tailor] appended corrective clause for {', '.join(tailored_consensus)} "
+                "(consensus)")
     out_dir = args.out_dir or (os.path.splitext(args.batch)[0] + "_out")
     os.makedirs(out_dir, exist_ok=True)
     escalate_path = os.path.join(out_dir, "_escalate.txt")
@@ -746,11 +1051,11 @@ def run_batch(args, prompt):
             else:
                 with open(path, "r", errors="replace") as fh:
                     item_prompt = f"{prompt}\n\n--- {base} ---\n{fh.read(24_000)}"
-            text = call_ollama(item_prompt, args.system, temperature, model,
+            text = call_ollama(item_prompt, sys_primary, temperature, model,
                                args.max_tokens, images)
             out_path = os.path.join(out_dir, base + ".out.txt")
             if consensus:
-                text2 = call_ollama(item_prompt, args.system, temperature, consensus,
+                text2 = call_ollama(item_prompt, sys_consensus, temperature, consensus,
                                     args.max_tokens, images)
                 a_path = os.path.join(out_dir, base + ".A.txt")
                 b_path = os.path.join(out_dir, base + ".B.txt")
@@ -775,7 +1080,7 @@ def run_batch(args, prompt):
             else:
                 with open(out_path, "w") as fh:
                     fh.write(text)
-                _witness(item_prompt, args.system, model, text, images, f"batch:{base}")
+                _witness(item_prompt, sys_primary, model, text, images, f"batch:{base}")
             ok += 1  # consensus mode: ok = agreed + escalated (both calls succeeded)
             consec_exit = 0
         except SystemExit:
@@ -796,8 +1101,11 @@ def run_batch(args, prompt):
                "failed_count": len(failed), "out_dir": out_dir, "model": model,
                "seconds": round(time.time() - t0, 1)}
     rec = {"script": "gemini", "backend": "ollama", "model": model,
+           "purpose": _subject(prompt, args.purpose), "tag": args.tag,
            "batch": len(items), "ok": ok, "failed_count": len(failed),
            "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
+           "tailored": tailored_primary or None,
+           "tailored_consensus": tailored_consensus or None,
            "seconds": summary["seconds"],
            # escalations are successes awaiting review — only real failures flip status
            "status": "ok" if not failed else "partial"}
@@ -823,7 +1131,7 @@ def main():
     ap = argparse.ArgumentParser(description="Query Gemini from the shell.")
     ap.add_argument("prompt", nargs="?", help="Prompt text. If omitted, read from stdin.")
     ap.add_argument("--backend", choices=["gemini", "gemini-cli", "fm", "ollama", "openai"],
-                    default="gemini",
+                    default=None,
                     help="gemini (cloud API, default — files/grounding/JSON) | gemini-cli (drives the "
                          "logged-in Gemini CLI on your OAuth/subscription quota — no API rate limits) | "
                          "fm (Apple on-device, free/offline/private) | ollama (local model, free/unlimited) | "
@@ -864,11 +1172,32 @@ def main():
                          "(classify/extract) where exact-match voting is meaningful. MODEL2 "
                          "must differ from the primary, and must be a vision model when the "
                          "manifest contains images.")
+    ap.add_argument("--purpose", default=None, metavar="TEXT",
+                    help="One-line 'what this run is for', recorded in the usage ledger. "
+                         "Auto-derived from the prompt when omitted.")
+    ap.add_argument("--tag", default=None, metavar="TASKSHAPE",
+                    help="Task-shape label (research | doc-format | classify | vision ...). "
+                         "Groups the ledger and feeds hebbian routing weights.")
     ap.add_argument("--preflight", action="store_true",
                     help="Treat the output as Python code: syntax-check it (no execution) and, on a "
                          "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
+    ap.add_argument("--no-tailor", action="store_true", dest="no_tailor",
+                    help="Skip auto-appended per-model corrective clauses (see MODEL_PROFILES). "
+                         "Route warnings for a known-bad model+tag combo still print.")
     args = ap.parse_args()
     t0 = time.time()
+
+    # Resolve the cost-driven local default BEFORE anything else reads args.backend.
+    # Only fires when the caller left both --backend and --model unset — an explicit
+    # choice of either always wins. --search has no local equivalent, so it always
+    # forces cloud regardless of this table.
+    if args.backend is None and args.model is None and not args.search \
+            and args.tag in DEFAULT_LOCAL_FOR_TAG:
+        args.backend = "ollama"
+        args.model = DEFAULT_LOCAL_FOR_TAG[args.tag]
+        log(f"[cost] --tag {args.tag} defaults to local (--backend ollama --model "
+            f"{args.model}, free/unlimited) — pass --backend gemini to override")
+    args.backend = args.backend or "gemini"
 
     if args.consensus and (not args.batch or args.backend != "ollama"):
         log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "
@@ -883,7 +1212,15 @@ def main():
                 print(m["name"].replace("models/", ""))
         return
 
-    prompt = args.prompt if args.prompt is not None else sys.stdin.read()
+    # Piped stdin is INPUT DATA: with a prompt arg it appends below the prompt (the
+    # documented `cat spec.txt | gemini.py "Make a checklist"` shape); with no prompt
+    # arg it IS the prompt. Previously stdin was silently dropped when a prompt arg
+    # was present — every backend lost the piped payload (caught 2026-07-12).
+    stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+    if args.prompt is not None:
+        prompt = f"{args.prompt}\n\n{stdin_text}" if stdin_text.strip() else args.prompt
+    else:
+        prompt = stdin_text
     if not prompt.strip() and not args.file:
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)
@@ -920,33 +1257,49 @@ def main():
             sys.exit(2)
         if args.backend == "fm":
             model_eff = "fm"
-            text = call_fm(prompt, args.system, args.temperature)
         elif args.backend == "ollama":
             # vision needs a vision model: auto-pick gemma4 when images are present
             model_eff = args.model or ("gemma4:26b" if images else "qwen3-coder:30b")
-            text = call_ollama(prompt, args.system, args.temperature, model_eff,
-                               args.max_tokens, images)
         elif args.backend == "openai":
             model_eff = args.model or "unset"
-            text = call_openai_compat(prompt, args.system, args.temperature, args.model,
-                                      args.max_tokens, args.base_url)
         else:
             model_eff = args.model or "default"
-            text = call_gemini_cli(prompt, args.system, args.temperature, args.model,
+        sys_eff, tailored = tailor_system(args.system, model_eff, args.tag, args.no_tailor)
+        if tailored:
+            log(f"[tailor] appended corrective clause for {', '.join(tailored)}")
+        if args.backend == "fm":
+            text = call_fm(prompt, sys_eff, args.temperature)
+        elif args.backend == "ollama":
+            text = call_ollama(prompt, sys_eff, args.temperature, model_eff,
+                               args.max_tokens, images)
+        elif args.backend == "openai":
+            text = call_openai_compat(prompt, sys_eff, args.temperature, args.model,
+                                      args.max_tokens, args.base_url)
+        else:
+            text = call_gemini_cli(prompt, sys_eff, args.temperature, args.model,
                                    preflight=args.preflight)
         print(text)
         sys.stdout.flush()
         _ledger({"script": "gemini", "backend": args.backend, "model": model_eff,
+                 "purpose": _subject(prompt, args.purpose), "tag": args.tag,
+                 "files": [os.path.basename(f) for f in args.file] or None,
                  "prompt_chars": len(prompt), "out_chars": len(text),
-                 "images": len(images) or None,
+                 "images": len(images) or None, "tailored": tailored or None,
                  "seconds": round(time.time() - t0, 1), "status": "ok"})
         if args.backend == "ollama":
-            _witness(prompt, args.system, model_eff, text, images, "oneshot")
+            _witness(prompt, sys_eff, model_eff, text, images, "oneshot")
         return
 
     # --- gemini backend (default) ---
     key = api_key()
-    model = ALIASES.get(args.model or "flash", args.model or "flash")
+    default_model = DEFAULT_MODEL_BY_TAG.get(args.tag, "flash")
+    if args.model is None and args.tag in DEFAULT_MODEL_BY_TAG:
+        log(f"[route] --tag {args.tag} defaults to {default_model} "
+            f"(ledger-measured; pass --model to override)")
+    model = ALIASES.get(args.model or default_model, args.model or default_model)
+    sys_eff, tailored = tailor_system(args.system, model, args.tag, args.no_tailor)
+    if tailored:
+        log(f"[tailor] appended corrective clause for {', '.join(tailored)}")
 
     parts = []
     for fp in args.file:
@@ -959,8 +1312,8 @@ def main():
 
     body = {"contents": [{"role": "user", "parts": parts}]}
 
-    if args.system:
-        body["systemInstruction"] = {"parts": [{"text": args.system}]}
+    if sys_eff:
+        body["systemInstruction"] = {"parts": [{"text": sys_eff}]}
     if args.search:
         body["tools"] = [{"googleSearch": {}}]
 
@@ -1003,10 +1356,13 @@ def main():
     log(f"tokens: prompt={u.get('promptTokenCount')} output={u.get('candidatesTokenCount')} "
         f"thoughts={u.get('thoughtsTokenCount', 0)} total={u.get('totalTokenCount')}")
     _ledger({"script": "gemini", "backend": "gemini", "model": model,
+             "purpose": _subject(prompt, args.purpose), "tag": args.tag,
+             "file_names": [os.path.basename(f) for f in args.file] or None,
              "prompt_chars": len(prompt), "out_chars": len(text),
              "tokens_prompt": u.get("promptTokenCount"),
              "tokens_out": u.get("candidatesTokenCount"),
              "search": bool(args.search), "files": len(args.file),
+             "tailored": tailored or None,
              "seconds": round(time.time() - t0, 1), "status": "ok"})
     fr = cand.get("finishReason")
     if fr and fr != "STOP":

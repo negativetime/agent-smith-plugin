@@ -68,6 +68,11 @@ Full recipes: [references/playbooks.md](references/playbooks.md).
 5. **Report + record the verdict** — tell the user what you delegated and verified, then:
    `python3 "$SKILL/scripts/verdict.py" good` (or `bad "why"`). One line, every review.
 
+Tag the call with `--tag SHAPE` (`research`, `doc-format`, `classify`, `code-draft`,
+`vision-prescreen`, `long-digest`, …) — it groups the ledger, feeds the routing weights
+below, and unlocks the tag-driven defaults in **Routing defaults**. Untagged runs still
+work; they just default to plain `flash` and stay invisible to the routing/cost analysis.
+
 ## Using the helper
 
 `scripts/gemini.py` — answer on stdout; model/tokens/sources on stderr (read both).
@@ -81,9 +86,12 @@ SKILL="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/skills/agent-smith}"
 SKILL="${SKILL:-$HOME/.claude/skills/agent-smith}"
 python3 "$SKILL/scripts/gemini.py" "Explain X in 5 bullets"                       # flash default
 cat spec.txt | python3 "$SKILL/scripts/gemini.py" --model pro "Make a checklist"  # stdin
-python3 "$SKILL/scripts/gemini.py" --search "What's new in Swift?"                # grounded research
+python3 "$SKILL/scripts/gemini.py" --search --tag research "What's new in Swift?" # grounded research
 python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize as bullets"       # file ingest
 python3 "$SKILL/scripts/gemini.py" --file inv.pdf --schema s.json "Extract items" # JSON extraction
+
+# --tag alone can pick the backend/model for you — see Routing defaults below.
+python3 "$SKILL/scripts/gemini.py" --tag doc-format "Tighten this README for clarity"
 
 # BATCH (local, zero Claude tokens per item): manifest = one path per line;
 # images ride vision, text appends to prompt; per-item .out.txt + ONE JSON summary.
@@ -97,8 +105,33 @@ python3 "$SKILL/scripts/gemini.py" --backend ollama --model llama3.2:3b \
 
 Windows: same flags, `python` launcher, `Get-Content` for stdin.
 **Flags:** `--model` · `--system` · `--file` (repeatable) · `--search` · `--json`/`--schema` ·
-`--temperature` · `--max-tokens` · `--thinking-budget N` · `--preflight` (gemini-cli syntax
-check) · `--list-models`. API internals: [references/gemini-api.md](references/gemini-api.md).
+`--temperature` · `--max-tokens` · `--thinking-budget N` · `--tag SHAPE` · `--purpose TEXT` ·
+`--no-tailor` · `--preflight` (gemini-cli syntax check) · `--list-models`. API internals:
+[references/gemini-api.md](references/gemini-api.md).
+
+## Routing defaults (tag-driven)
+
+`--tag SHAPE` does more than label the ledger — a handful of shapes carry a MEASURED
+default so you don't have to remember the right backend/model by hand. These only fire
+when you leave BOTH `--backend` and `--model` unset (either one explicitly wins):
+
+- **Cost default — free local instead of paid cloud.** `doc-format`, `classify`,
+  `code-draft`, `vision-prescreen`, and `long-digest` default to `--backend ollama` on a
+  fleet model already trusted for that shape (see **Local fleet routing** above) —
+  logged as `[cost] --tag X defaults to local`. A bare `gemini.py "…" --tag doc-format`
+  now costs nothing instead of quietly billing the cloud API.
+- **Quality default — a better cloud model, not just the flash fallback.** `research`
+  defaults to `pro` instead of `flash` — grounded fact-finding needs more reasoning
+  budget than flash reliably gives it — logged as `[route] --tag research defaults to pro`.
+- **Known-bad routes get called out, not silently patched.** A (model, tag) combo the
+  ledger has scored badly on prints `WARNING: [route] …` instead of degrading quietly —
+  a routing decision belongs with you, not a hidden override.
+
+**Per-model prompt tailoring.** Every call also gets a one-line, MEASURED corrective
+clause appended to `--system` for the model actually running (e.g. "strip debug residue"
+for a model caught leaving commented-out prints in code drafts) — the fix lands on every
+call instead of only the ones where you remember to type it in by hand. Disable with
+`--no-tailor` (route warnings still print — those are a routing signal, not a prompt fix).
 
 ## Backends (`--backend`) — default `gemini`, reach for edges
 
@@ -150,7 +183,10 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
 
 ## Progress tracking — ledger, verdicts, routing weights, witness
 
-- Every run appends one JSON line to `data/usage.jsonl` (fail-safe; `SMITH_LEDGER` overrides).
+- Every run appends one JSON line to `data/usage.jsonl` (fail-safe; `SMITH_LEDGER` overrides),
+  including a `purpose` (explicit `--purpose`, or auto-derived from the prompt's first
+  substantive line — set `SMITH_LOG_PROMPTS=0` to record only explicit purposes) so runs
+  stay reviewable after the fact instead of collapsing into indistinguishable rows.
   Review: `python3 "$SKILL/scripts/usage_report.py"` (`--today`, `--last N`).
 - **Verdicts:** `ok` = completed, not correct. After review:
   `verdict.py good|bad "why" [--tag TASKTYPE] [--model M] [--script S]`. Tags feed the

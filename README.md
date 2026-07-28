@@ -27,6 +27,10 @@ treated as a deliverable until it's been reviewed.
   per-item output files, ONE summary back — zero per-item orchestration cost
 - **A usage ledger** — every run logs one JSON line (`data/usage.jsonl`); check what your
   fleet actually did with `scripts/usage_report.py`
+- **Tag-driven routing** — `--tag doc-format|classify|code-draft|vision-prescreen|long-digest`
+  defaults to a free local model automatically (no `--backend ollama` to remember), `--tag
+  research` defaults to the stronger cloud model instead of the weaker default, and known-bad
+  (model, tag) combos print a warning instead of silently degrading
 
 It is **not** for short/interactive work, correctness-critical debugging, or the *execution* half of
 a task (deploying, committing, posting) — those stay with Claude or a script you control.
@@ -121,6 +125,11 @@ SKILL="${SKILL:-$HOME/.claude/skills/agent-smith}"
 python3 "$SKILL/scripts/gemini.py" --search "What's new in the latest Python release?"
 python3 "$SKILL/scripts/gemini.py" --file report.pdf "Summarize the findings as bullets"
 python3 "$SKILL/scripts/gemini.py" --backend ollama --model qwen3-coder:30b "Draft a function that ..."
+
+# --tag alone can pick backend/model for you: doc-format/classify/code-draft/
+# vision-prescreen/long-digest default to a free local model; research defaults
+# to the stronger cloud model instead of the weak default. No flags to remember.
+python3 "$SKILL/scripts/gemini.py" --tag doc-format "Tighten this README for clarity"
 
 # local vision: what's wrong with this screenshot?
 python3 "$SKILL/scripts/gemini.py" --backend ollama --file shot.png "Anything visibly broken?"
