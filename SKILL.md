@@ -302,6 +302,27 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   server via `--backend openai --base-url` (llama-server, `mlx_lm server` — proven, LM
   Studio). Ollama is the hub, not a dependency. LM Studio pilot (install, CLI, perf vs
   Ollama, a real tool-loop bug found + fixed): [references/lmstudio-pilot-2026-07-15.md](references/lmstudio-pilot-2026-07-15.md).
+- **Remote OpenAI-compatible lanes (`--base-url` shorthands):** `groq` · `openrouter` ·
+  `openai` · `ollama` · **`zai`** · **`cloudflare`**. Auth resolves per host —
+  `GROQ_API_KEY` · `ZAI_API_KEY` · `CF_API_TOKEN` · else `OPENAI_API_KEY`. `cloudflare`
+  also needs `CF_ACCOUNT_ID` (32-hex; a numeric id is NOT an account id and 404s with
+  error 7003).
+  ```bash
+  export ZAI_API_KEY=...        # keys live in the env, NEVER in a file
+  python3 "$SKILL/scripts/gemini.py" --backend openai --base-url zai \
+    --model glm-4.5-flash --max-tokens 3000 --tag code-draft "..."
+  ```
+  **z.ai reality check (measured 2026-07-28, NOT the marketing claim):** the account's
+  `/models` lists `glm-4.5 4.5-air 4.6 4.7 5 5-turbo 5.1 5.2`, but every one of those
+  returns **HTTP 429 "Insufficient balance or no resource package"**. Only
+  `glm-4.5-flash` (not in the list) actually answers. The widely-repeated "300M free
+  tokens/day for GLM-5.2" did **not** hold on a real key — GLM-5.2 needs a paid balance.
+- **Reasoning models return an EMPTY answer on too small a budget** — success-shaped
+  failure. `glm-4.5-flash` spends the budget on a hidden `reasoning_content` channel
+  before writing `content`: at `--max-tokens 120` it returned HTTP 200 with **zero**
+  content, at 3000 a full correct answer. `gemini.py` now logs a `WARNING: empty content`
+  line naming the cause. Give any reasoning model ≥1500. (Same shape as the gpt-oss:20b
+  8192-truncation lesson — reasoning overhead is not free budget.)
 - **Witness drift sensor (trust has a forgetting curve):** local runs are silently re-run
   on `SMITH_WITNESS_MODEL` (default gpt-oss:20b) on an FSRS-style schedule — the interval
   grows with each consecutive agreement (every 4 runs -> 8 -> 16 ... cap 256) and COLLAPSES

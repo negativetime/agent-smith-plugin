@@ -724,12 +724,23 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
     BASE_ALIASES = {"groq": "https://api.groq.com/openai/v1",
                     "openrouter": "https://openrouter.ai/api/v1",
                     "openai": "https://api.openai.com/v1",
-                    "ollama": "http://localhost:11434/v1"}
+                    "ollama": "http://localhost:11434/v1",
+                    # z.ai (Zhipu) — OpenAI-compatible. Verified 2026-07-28.
+                    "zai": "https://api.z.ai/api/paas/v4",
+                    # Cloudflare Workers AI — needs CF_ACCOUNT_ID (32-hex) in the env.
+                    "cloudflare": "https://api.cloudflare.com/client/v4/accounts/"
+                                  + (os.environ.get("CF_ACCOUNT_ID") or "MISSING_CF_ACCOUNT_ID")
+                                  + "/ai/v1"}
     base = base_url or os.environ.get("OPENAI_BASE_URL") or ""
     base = BASE_ALIASES.get(base, base).rstrip("/")
     if not base:
         log("ERROR: --backend openai needs --base-url or OPENAI_BASE_URL "
-            "(shorthands: groq | openrouter | ollama — or a full .../v1 URL).")
+            "(shorthands: groq | openrouter | ollama | zai | cloudflare — "
+            "or a full .../v1 URL).")
+        sys.exit(2)
+    if "MISSING_CF_ACCOUNT_ID" in base:
+        log("ERROR: --base-url cloudflare needs CF_ACCOUNT_ID set (32-hex, from the "
+            "Cloudflare dashboard — a numeric id is NOT an account id).")
         sys.exit(2)
     if not model:
         log("ERROR: --backend openai needs --model (endpoint-specific, e.g. "
@@ -747,6 +758,10 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
     key = os.environ.get("OPENAI_API_KEY")
     if "groq.com" in base:
         key = os.environ.get("GROQ_API_KEY") or key
+    elif "z.ai" in base or "bigmodel.cn" in base:
+        key = os.environ.get("ZAI_API_KEY") or key
+    elif "api.cloudflare.com" in base:
+        key = os.environ.get("CF_API_TOKEN") or key
     if key:
         headers["Authorization"] = f"Bearer {key}"
     resp = None
@@ -769,13 +784,29 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
         except urllib.error.URLError as e:
             log(f"ERROR: can't reach {base} ({e}).")
             sys.exit(1)
-    text = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+    choice = (resp.get("choices") or [{}])[0]
+    msg = choice.get("message", {}) or {}
+    text = msg.get("content", "") or ""
     u = resp.get("usage") or {}
     log("\n--- openai-compat meta ---")
     log(f"endpoint: {base}  model: {model}"
         + ("  auth: bearer" if key else "  auth: none"))
     if u:
         log(f"tokens: prompt={u.get('prompt_tokens')} output={u.get('completion_tokens')}")
+    # Reasoning models (glm-4.5-flash, gpt-oss, …) spend the budget on a hidden
+    # reasoning channel FIRST and only then write `content`. Too small a --max-tokens
+    # returns HTTP 200 with an EMPTY answer — success-shaped failure, the kind that
+    # lands in the ledger as `ok`. Say so loudly instead. (Measured 2026-07-28:
+    # glm-4.5-flash burned all 300 tokens reasoning; 3000 produced a full answer.)
+    if not text.strip():
+        why = []
+        if msg.get("reasoning_content"):
+            why.append(f"{len(msg['reasoning_content'])} chars went to reasoning_content")
+        if choice.get("finish_reason") == "length":
+            why.append("finish_reason=length (budget exhausted)")
+        log(f"WARNING: empty content from {model}"
+            + (f" — {'; '.join(why)}. Raise --max-tokens." if why
+               else f" (finish_reason={choice.get('finish_reason')})."))
     return text
 
 
