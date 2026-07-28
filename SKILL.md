@@ -312,6 +312,19 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   python3 "$SKILL/scripts/gemini.py" --backend openai --base-url zai \
     --model glm-4.5-flash --max-tokens 3000 --tag code-draft "..."
   ```
+- **Vision stays LOCAL — bake-off settled 2026-07-28, do not re-litigate.** Screenshot/UI
+  triage was the biggest measured offload gap (507M chars on Claude), so the Cloudflare
+  vision models were tested against the incumbent on one full-res app-screenshot crop with
+  exact ground truth (`Blue Jay 52% / Northern Cardinal 40% / American Robin 8%` — chosen
+  because digit strings are `qwen3-vl:4b`'s known weak spot):
+  | model | score | note |
+  |---|---|---|
+  | **`qwen3-vl:4b` (local, 3.3 GB)** | **6/6** | every species and digit exact, identical across trials. Free + private |
+  | `@cf/llava-hf/llava-1.5-7b-hf` | **0/9** | does not OCR — it DESCRIBES AN IMAGINED SCENE ("two birds: a Robin and a Cardinal"), missed Blue Jay entirely, invented 60/40 then 50/50, and hallucinated a "European Robin" when downscaled |
+  | `@cf/moondream/moondream3.1-9B-A2B` | untested | rejects every documented image shape (`Type mismatch of '/image'`) with no schema published; priced $0.30/$1.00 |
+  llava's wiring is fine (`{"image":[bytes],"prompt","max_tokens"}` → HTTP 200) — it is a
+  **capability** failure, not a config one. **A tiny local model beat both remote options
+  outright.** Vision offload is closed until a genuinely stronger vision model appears.
 - **Embeddings + reranking — `scripts/embed.py` (NEW 2026-07-28).** The fleet had neither
   until now; every retrieval question was Claude reading files. Free on Workers AI, needs
   `CF_API_TOKEN` + `CF_ACCOUNT_ID`.
