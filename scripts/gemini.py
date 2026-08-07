@@ -63,7 +63,12 @@ DEFAULT_LOCAL_FOR_TAG = {
     "doc-format": "qwen3-coder:30b",       # 2g/0b (gpt-oss:20b is BLOCKED here, 0g/3b — don't use it)
     "classify": "llama3.2:3b",             # 1g/0b
     "vision-prescreen": "qwen3-vl:4b",     # 3g/0b, TRUSTED
-    "subagent-fanout": "gpt-oss:20b",      # 1g/0b (2026-07-27 smoke test)
+    # 2026-08-06: bad verdict on a 38-hunk diff-review batch — 4 of the largest diffs
+    # returned 0 BYTES at --max-tokens 3000 (gpt-oss:20b's reasoning channel ate the
+    # whole budget before writing content, same shape as the doc-html 8192-truncation
+    # lesson). The highest-risk diffs were exactly the ones it silently skipped.
+    # min_max_tokens mirrors the DEFAULT_PAID_FOR_TAG floor mechanism below.
+    "subagent-fanout": {"model": "gpt-oss:20b", "min_max_tokens": 8192},
 }
 # PRIVACY OVERRIDE (2026-07-28): long-digest moved to DEFAULT_PAID_FOR_TAG below for the
 # general case, but content with credentials/PII/anything sensitive must still be sent here
@@ -115,7 +120,14 @@ MODEL_PROFILES = {
         "Before returning, strip debug prints, dead or commented-out branches, and any "
         "comment or docstring claiming behavior the code doesn't actually implement "
         "(measured failure mode: this exact residue cost this model a blinded design "
-        "review against gemma4:26b)."
+        "review against gemma4:26b). "
+        "When reviewing code for bugs: quote the exact line(s) verbatim and restate the "
+        "guard/condition in your own words before flagging anything as broken, and check "
+        "whether a callee already handles the concern you're about to raise — a prior "
+        "review scored 0/4 real findings this way (misread a guard's polarity, called a "
+        "non-empty literal 'could be empty', and flagged a path as unexpanded when the "
+        "function it called already expanded it); default to CLEAN unless you can quote "
+        "the evidence."
     ),
     "gemma4:26b": (
         "If reading a tall or full-page screenshot, do not invent small text you can't "
@@ -1356,10 +1368,18 @@ def main():
             args.max_tokens = floor
     elif args.backend is None and args.model is None and not args.search \
             and args.tag in DEFAULT_LOCAL_FOR_TAG:
+        entry = DEFAULT_LOCAL_FOR_TAG[args.tag]
+        cfg = entry if isinstance(entry, dict) else {"model": entry}
         args.backend = "ollama"
-        args.model = DEFAULT_LOCAL_FOR_TAG[args.tag]
+        args.model = cfg["model"]
         log(f"[cost] --tag {args.tag} defaults to local (--backend ollama --model "
             f"{args.model}, free/unlimited) — pass --backend gemini to override")
+        floor = cfg.get("min_max_tokens")
+        if floor and (args.max_tokens is None or args.max_tokens < floor):
+            log(f"[cost] --tag {args.tag} raises --max-tokens to {floor} "
+                f"(reasoning-budget floor for this shape — silent empty output otherwise) "
+                f"— pass --max-tokens to override")
+            args.max_tokens = floor
     args.backend = args.backend or "gemini"
 
     if args.consensus and (not args.batch or args.backend != "ollama"):

@@ -223,6 +223,12 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   calls, still **0% delegated** as of 2026-07-28. First real evidence landed that day
   though: a 10-file read+summarize test against `zai-glm-5.2` scored 10/10 against ground
   truth (verdict good) — a genuine trial-ready result, not just an untested route anymore.
+  **Correctness-critical work (code review, bug hunts) is fair game for this tag too** —
+  the fleet drafts candidate findings, Claude re-verifies every one against the real file
+  before acting; see playbook 6 in
+  [references/playbooks.md](references/playbooks.md) for the prompt template that fixed a
+  measured 0/4-false-positive run (`--max-tokens` floor raised to 8192, `gpt-oss:20b`'s
+  profile clause now demands a quoted line + restated guard before any finding).
 - **Long-document digest** (logs, transcripts, CSVs, contracts) → bare `--tag long-digest`
   now defaults to the paid GLM Coding Plan (see DEFAULT-TO-PAID above). Route explicitly to
   `--backend ollama --model gpt-oss:20b` (131k ctx) for anything sensitive — that's a

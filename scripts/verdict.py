@@ -16,7 +16,10 @@ import argparse
 import datetime
 import json
 import os
+import sqlite3
 import sys
+
+import verdict_db
 
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "usage.jsonl")
@@ -80,6 +83,11 @@ def main():
         rec["tag"] = args.tag
     with open(LEDGER, "a") as f:
         f.write(json.dumps(rec) + "\n")
+    try:
+        verdict_db.insert(rec)
+    except sqlite3.Error as e:
+        print(f"warning: verdicts.db insert failed ({e}); jsonl ledger is unaffected",
+              file=sys.stderr)
     desc = (f"{target.get('script')}:{target.get('model')} @ {target.get('ts')}"
             + (f" — {target.get('task', '')[:60]}" if target.get("task") else ""))
     print(f"marked {args.verdict.upper()}: {desc}"

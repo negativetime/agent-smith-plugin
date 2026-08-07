@@ -179,6 +179,62 @@ Paper Chapel), pass that project's existing CSS block as the shell instead — s
 
 ---
 
+## 6. Correctness-critical review (fleet drafts findings, Claude verifies every one)
+
+**Fires when:** you want a first pass over a diff, a bug report, or a design for problems —
+code review, security review, "did I miss anything" sweeps. This is the one playbook where the
+drafted artifact is a set of *claims about correctness*, not prose or boilerplate — so the seam
+isn't "offload the words, keep the action," it's **offload the search, keep the verdict.**
+Nothing the fleet finds is true until Claude re-derives it from the real code.
+
+**Offload to the fleet:**
+- A first pass over a diff/file/spec, batched per-hunk or per-file (`--batch`) so review scales
+  without blowing one model's context.
+- Flagging *candidates* — the fleet's job is recall (don't miss anything plausible), not
+  precision. Precision is Claude's job on the next pass.
+
+```bash
+python3 "$SKILL/scripts/gemini.py" --backend ollama --batch --tag subagent-fanout \
+  "You are reviewing ONE git diff from a shipping app whose full test suite currently passes —
+treat that as strong evidence the code already works; you are hunting for what the tests don't
+cover, not re-deriving already-passing behavior from scratch.
+
+For EVERY finding: quote the exact line(s) verbatim, then restate the guard/condition or data
+flow in your own words, then explain what concrete input makes it fail. If you can't quote the
+line, you don't have a finding. Before flagging anything as unhandled, check whether a function
+it calls already handles it — read the callee, don't assume from the name.
+
+Default to CLEAN. A CLEAN verdict on a hunk you actually read is more useful than a speculative
+finding you can't back with a quote. If you run out of budget before finishing a hunk, say
+SKIPPED (budget) for it explicitly — do not let it silently read as clean.
+
+Diff:
+<hunk>"
+```
+
+**Keep on Claude:**
+- **Every finding gets independently re-checked against the real file before it's acted on** —
+  read the actual line, actual control flow, actual callee. This is the standing rule for every
+  playbook here, but it's load-bearing for this one specifically: a fleet model's code review
+  measured **0/4 real findings** on one pass (misread a guard's polarity, called a non-empty
+  literal "could be empty," flagged a path as unexpanded when the callee already expanded it) —
+  see the `gpt-oss:20b` profile clause in `gemini.py` for the exact evidence.
+- The actual fix, and the commit. A verified-real finding still gets fixed by Claude, not by
+  pasting the fleet's suggested patch — the fleet doesn't have repo/tool access to make the fix
+  correctly anyway.
+- Anything where the *search itself* requires judgment the fleet doesn't have (architectural
+  fit, "is this the right abstraction," cross-file invariants a single-hunk batch can't see).
+
+**Verify:** for each CLEAN, spot-check a sample (you don't have to re-read everything — that
+erases the savings). For each finding, always re-read the quoted line yourself before believing
+it: does the guard actually say what it claims, does the callee actually not handle it. Discard
+anything you can't confirm firsthand. `verdict.py good|bad --tag subagent-fanout` either way —
+a bad verdict here is worth more than a good one, because it's a ready-made regression case for
+the prompt/routing (see the gpt-oss:20b profile clause and the `min_max_tokens` floor this
+finding produced).
+
+---
+
 ## The seam, restated
 
 For every one of these: **offload the words, keep the action.** If a step would deploy, commit,
