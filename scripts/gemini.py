@@ -197,6 +197,25 @@ def api_key():
 # one-shots — the gym raises this via env for scout runs
 GEN_HTTP_TIMEOUT = int(os.environ.get("SMITH_GEN_TIMEOUT", "600"))
 
+# Residency: how long Ollama holds a model in RAM/VRAM after a call. Server default is
+# 5 minutes, so a one-shot draft keeps 12-18 GB pinned long after it answered — on the
+# 36 GB Mac that is what makes the NEXT call to a different model pay a 20-60s swap.
+# "0" unloads the moment the reply lands, "-1" pins forever, "30s"/"5m" are durations.
+# Left None we send nothing and Ollama's own default applies (unchanged behaviour).
+OLLAMA_BASE = "http://localhost:11434"
+KEEP_ALIVE = os.environ.get("SMITH_KEEP_ALIVE") or None
+
+
+def _keep_alive_value(v):
+    """Ollama takes a duration string ("30s", "5m") or a bare number of seconds."""
+    if v is None:
+        return None
+    v = str(v).strip()
+    try:
+        return int(v)
+    except ValueError:
+        return v
+
 
 def http(url, method="GET", data=None, headers=None, timeout=300):
     req = urllib.request.Request(url, method=method, data=data, headers=headers or {})
@@ -382,6 +401,8 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
         user_msg["images"] = images
     msgs.append(user_msg)
     body = {"model": model, "messages": msgs, "stream": False}
+    if KEEP_ALIVE is not None:
+        body["keep_alive"] = _keep_alive_value(KEEP_ALIVE)
     opts = {}
     if temperature is not None:
         opts["temperature"] = temperature
@@ -403,7 +424,7 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
             log(f"WARNING: input ~{est} est. tokens exceeds the 131072 num_ctx cap — head will truncate. Split the input or use --backend gemini (1M context).")
     if opts:
         body["options"] = opts
-    req = urllib.request.Request("http://localhost:11434/api/chat", method="POST",
+    req = urllib.request.Request(OLLAMA_BASE + "/api/chat", method="POST",
                                  data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
@@ -419,6 +440,9 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
     text = resp.get("message", {}).get("content", "")
     log("\n--- ollama meta ---")
     log(f"backend: ollama  model: {model}  (local · free · unlimited)")
+    if KEEP_ALIVE is not None:
+        log(f"keep_alive: {KEEP_ALIVE}"
+            + ("  (unloaded from memory now)" if str(KEEP_ALIVE) in ("0", "0s") else ""))
     pe, ec = resp.get("prompt_eval_count"), resp.get("eval_count")
     if pe is not None or ec is not None:
         log(f"tokens: prompt={pe} output={ec}")
@@ -1265,6 +1289,34 @@ def run_batch(args, prompt):
     _ledger(rec)
 
 
+def _arm_unload_after():
+    """Snapshot what Ollama already had hot, and free only what WE add, at exit.
+
+    Deliberately narrower than `model_unload.py --all`: this process cannot tell why
+    another model is resident, so it only ever gives back memory it caused to be taken.
+    Best-effort by construction — a cleanup failure must never change a run's exit code
+    or bury the real output, so everything here is swallowed.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import atexit
+        import model_unload
+    except Exception:  # noqa: BLE001
+        log("NOTE: --unload-after unavailable (model_unload.py not importable).")
+        return
+    before = model_unload.resident_names(OLLAMA_BASE)
+
+    def _cleanup():
+        try:
+            freed = model_unload.unload_new_since(before, OLLAMA_BASE)
+            if freed:
+                log(f"[unload] freed after run: {', '.join(freed)}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    atexit.register(_cleanup)
+
+
 def main():
     # Force UTF-8 on stdout/stderr so Gemini's Unicode output (em-dashes, accents, etc.)
     # prints cleanly on Windows consoles, which often default to cp1252.
@@ -1308,6 +1360,16 @@ def main():
                          "to --out-dir, prints ONE JSON summary. Zero Claude tokens per item.")
     ap.add_argument("--out-dir", default=None, dest="out_dir",
                     help="--batch output directory (default: <manifest>_out).")
+    ap.add_argument("--keep-alive", default=None, dest="keep_alive", metavar="DUR",
+                    help="ollama backend: how long the model stays in memory after this "
+                         "call. 0 = unload as soon as the reply lands, -1 = pin, or a "
+                         "duration like 30s/5m. Default: SMITH_KEEP_ALIVE, else Ollama's "
+                         "own 5m.")
+    ap.add_argument("--unload-after", action="store_true", dest="unload_after",
+                    help="ollama backend: when the run ends, unload every model this run "
+                         "loaded. Models that were ALREADY resident when it started are "
+                         "left alone — they belong to whatever loaded them (the claude-mem "
+                         "observer's gpt-oss:20b, another session).")
     ap.add_argument("--consensus", default=None, metavar="MODEL2",
                     help="Consensus batch mode (requires --batch, ollama backend only): run "
                          "every item on BOTH the primary model and MODEL2 (temperature 0 "
@@ -1381,6 +1443,19 @@ def main():
                 f"— pass --max-tokens to override")
             args.max_tokens = floor
     args.backend = args.backend or "gemini"
+
+    # Residency control (ollama only — the other backends hold no local memory).
+    # --unload-after is registered with atexit rather than run at the end of main() so
+    # it still fires on the sys.exit paths (backend error, batch abort): a run that died
+    # holding 18 GB is exactly the case that needs the memory back.
+    if args.backend == "ollama":
+        global KEEP_ALIVE
+        if args.keep_alive is not None:
+            KEEP_ALIVE = args.keep_alive
+        if args.unload_after:
+            _arm_unload_after()
+    elif args.keep_alive is not None or args.unload_after:
+        log("NOTE: --keep-alive/--unload-after apply to --backend ollama only; ignored.")
 
     if args.consensus and (not args.batch or args.backend != "ollama"):
         log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "

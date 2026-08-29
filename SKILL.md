@@ -164,6 +164,25 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
   gemma4:26b (vision) / qwen3-coder:30b deliberately and expect the swap. If Ollama wedges
   (model stuck "Stopping...", requests hang): `kill` the `llama-server` runner PID, or
   restart Ollama.app.
+- **Give the memory back — `scripts/model_unload.py`.** Ollama holds a model for 5 minutes
+  after it answers, so a single one-shot on the 26b/30b keeps 16-18 GB pinned long after the
+  work is done, and it is the NEXT call that pays for it. Three levers, smallest first:
+  | want | use |
+  |---|---|
+  | see what's holding memory right now | `python3 "$SKILL/scripts/model_unload.py"` (reads only) |
+  | free it after this run, automatically | `--unload-after` on `gemini.py` / `smith_agent.py` |
+  | never let it linger at all | `--keep-alive 0` (or `SMITH_KEEP_ALIVE=0` for the session) |
+  | free it by hand, now | `model_unload.py --all --keep gpt-oss:20b` |
+
+  `--unload-after` only unloads models THAT RUN loaded — anything already hot when it started
+  (the claude-mem observer's `gpt-oss:20b`, another session's model) is left alone, so it is
+  safe to leave on. It fires from `atexit`, so a run that dies mid-loop still gives its memory
+  back. `--keep-alive 0` is stricter and unloads the instant each reply lands: right for a
+  one-shot on a big model, wrong for `smith_agent.py`, which would then reload the model every
+  turn — use `--unload-after` there. `--keep-alive -1` pins a model deliberately (what the
+  observer does). Defaults are unchanged: pass nothing and Ollama's own 5m still applies.
+  Add `--lms` to sweep LM Studio's separate pool, which `/api/ps` cannot see. Protect a model
+  permanently with `SMITH_UNLOAD_KEEP=gpt-oss:20b`.
 - Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
 
 ## DEFAULT-TO-LOCAL / DEFAULT-TO-PAID routes — gap report 2026-07-25, updated 2026-07-28
@@ -282,6 +301,7 @@ python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
   --workdir /path/to/SCRATCH --prompt-file task.txt
 # big single-file writes: add --max-gen-tokens 4096 (default 1600 truncates them)
 # cloud escalation: --backend gemini --model pro (5x slower, 503 risk)
+# free the GPU when the loop ends: add --unload-after (see Residency above)
 ```
 
 Rules: SCRATCH dirs only (it executes model shell — never a live repo); write the task like
@@ -341,6 +361,11 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   silently become a different model. `python3 "$SKILL/scripts/fleet_check.py"` compares
   current digests vs the accepted baseline (`--accept` after a deliberate update + re-gate);
   run it when anything smells off, and always after pulling updates.
+- **Nothing stays loaded that isn't working.** `python3 "$SKILL/scripts/model_unload.py"`
+  lists what Ollama (and, with `--lms`, LM Studio) is holding in RAM/VRAM and unloads it —
+  `--all`, or `--model TAG`, with `--keep TAG` for anything deliberately pinned. The
+  per-run form is `--unload-after` / `--keep-alive` on `gemini.py` and `smith_agent.py`;
+  see the Residency bullet in the FLEET section for which to reach for.
 - **Witness comparison is STRUCTURAL, not textual.** Python uses the stdlib `ast`; other
   languages use tree-sitter when installed — `pip install tree-sitter tree-sitter-language-pack`
   (OPTIONAL: absent, non-Python falls back to exact-match, the pre-2026-07-20 behaviour, and

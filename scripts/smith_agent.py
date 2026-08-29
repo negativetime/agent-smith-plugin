@@ -32,6 +32,10 @@ import urllib.error
 import urllib.request
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+# How long Ollama holds the model in memory after each turn. A tool loop is the worst
+# offender for stale residency: it can run for minutes, then leave 18 GB pinned for
+# another 5 by default. None = send nothing, Ollama's default applies. See --keep-alive.
+KEEP_ALIVE = os.environ.get("SMITH_KEEP_ALIVE") or None
 
 READ_LIMIT = 16000     # chars of a file the model may see at once
 OUT_LIMIT = 6000       # chars of stdout/stderr per command
@@ -306,6 +310,11 @@ def chat(model, messages, num_ctx, tools=True):
     payload = {"model": model, "messages": messages, "stream": False,
                "options": {"temperature": 0, "num_ctx": num_ctx,
                            "num_predict": MAX_GEN_TOKENS}}
+    if KEEP_ALIVE is not None:
+        try:
+            payload["keep_alive"] = int(str(KEEP_ALIVE).strip())
+        except ValueError:
+            payload["keep_alive"] = str(KEEP_ALIVE).strip()  # duration form: "30s", "5m"
     if tools:
         payload["tools"] = TOOLS
     req = urllib.request.Request(OLLAMA + "/api/chat",
@@ -417,8 +426,33 @@ def _ledger(rec):
         pass
 
 
+def _arm_unload_after():
+    """Free only the models THIS run loaded, at exit. Never evicts a model that was
+    already hot — it belongs to whatever loaded it. Best-effort: a cleanup failure must
+    not change the run's exit code or corrupt the one-line JSON summary on stdout."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import atexit
+        import model_unload
+    except Exception:  # noqa: BLE001
+        print("NOTE: --unload-after unavailable (model_unload.py not importable).",
+              file=sys.stderr)
+        return
+    before = model_unload.resident_names(OLLAMA)
+
+    def _cleanup():
+        try:
+            freed = model_unload.unload_new_since(before, OLLAMA)
+            if freed:
+                print(f"[unload] freed after run: {', '.join(freed)}", file=sys.stderr)
+        except Exception:  # noqa: BLE001
+            pass
+
+    atexit.register(_cleanup)
+
+
 def main():
-    global MAX_GEN_TOKENS
+    global MAX_GEN_TOKENS, KEEP_ALIVE
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--workdir", required=True)
@@ -443,11 +477,31 @@ def main():
     ap.add_argument("--tag", default="app-build", metavar="TASKSHAPE",
                     help="task-shape label for the ledger / hebbian router "
                          "(default: app-build).")
+    ap.add_argument("--keep-alive", default=None, dest="keep_alive", metavar="DUR",
+                    help="ollama backend: model residency after each turn. 0 = unload "
+                         "immediately (slow: reloads every turn), -1 = pin, or a duration "
+                         "like 30s/5m. Default: SMITH_KEEP_ALIVE, else Ollama's 5m. To "
+                         "free memory only once the loop is DONE, use --unload-after.")
+    ap.add_argument("--unload-after", action="store_true", dest="unload_after",
+                    help="ollama backend: on exit, unload every model this run loaded. "
+                         "Models already resident at startup are left alone.")
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
                          "(measured null result on qwen2.5-coder:14b, 2026-07-01)")
     args = ap.parse_args()
     MAX_GEN_TOKENS = args.max_gen_tokens
+
+    # Residency control — ollama only; the other backends hold no local memory.
+    # atexit, not an end-of-main call, so a run that dies mid-loop (tool-parse 500,
+    # max-turns bail, KeyboardInterrupt) still gives its memory back.
+    if args.backend == "ollama":
+        if args.keep_alive is not None:
+            KEEP_ALIVE = args.keep_alive
+        if args.unload_after:
+            _arm_unload_after()
+    elif args.keep_alive is not None or args.unload_after:
+        print("NOTE: --keep-alive/--unload-after apply to --backend ollama only; ignored.",
+              file=sys.stderr)
 
     workdir = os.path.realpath(args.workdir)
     with open(args.prompt_file) as f:
