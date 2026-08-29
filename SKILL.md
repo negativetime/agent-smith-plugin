@@ -164,6 +164,41 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
   gemma4:26b (vision) / qwen3-coder:30b deliberately and expect the swap. If Ollama wedges
   (model stuck "Stopping...", requests hang): `kill` the `llama-server` runner PID, or
   restart Ollama.app.
+- **Models don't stay loaded any more — this is now the DEFAULT, no flag needed.** Ollama's
+  own default holds a model for 5 minutes after it answers, so one one-shot on the 26b/30b
+  kept 16-18 GB pinned long after the work was done, and it was the NEXT call that paid for
+  it. Both scripts now release memory on their own:
+  | script | default | why |
+  |---|---|---|
+  | `gemini.py` (ollama backend) | `keep_alive=60s` | frees itself a minute after the last call; still hot for a chain of one-shots, so no cold load per call |
+  | `smith_agent.py` | `--unload-after` ON | keeps the model hot between turns (a `run_command` can take 90s), frees it once when the loop ends |
+
+  `--unload-after` only unloads models THAT RUN loaded — anything already hot when it started
+  (the claude-mem observer's `gpt-oss:20b`, another session's model) is left alone. That is
+  what makes it safe as a default. It fires from `atexit`, so a run that dies mid-loop still
+  gives its memory back.
+
+  Overrides, when you want something other than the default:
+  | want | use |
+  |---|---|
+  | see what's holding memory right now | `python3 "$SKILL/scripts/model_unload.py"` (reads only) |
+  | free it the instant the reply lands | `--keep-alive 0` (costs a cold load on the next call) |
+  | keep it hot for a follow-up run | `--no-unload-after` (smith_agent), `--keep-alive 5m` |
+  | pin it deliberately, as the observer does | `--keep-alive -1` |
+  | free everything by hand, now | `model_unload.py --all --keep gpt-oss:20b` |
+  | restore the old 5m behaviour everywhere | `SMITH_KEEP_ALIVE=5m` |
+
+  `SMITH_KEEP_ALIVE` sets the residency for a whole session; `SMITH_UNLOAD_KEEP=gpt-oss:20b`
+  protects a model from `model_unload.py` permanently. Add `--lms` to sweep LM Studio's
+  separate pool, which `/api/ps` cannot see.
+
+  Belt and braces — free the whole fleet when a Claude session ends, by adding a Stop hook to
+  `~/.claude/settings.json`. Nothing in the plugin installs this; add it only if the
+  per-run defaults above still leave something behind:
+  ```json
+  {"hooks": {"Stop": [{"hooks": [{"type": "command",
+    "command": "python3 \"$SKILL/scripts/model_unload.py\" --all --keep gpt-oss:20b"}]}]}}
+  ```
 - Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
 
 ## DEFAULT-TO-LOCAL / DEFAULT-TO-PAID routes — gap report 2026-07-25, updated 2026-07-28
@@ -282,6 +317,7 @@ python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
   --workdir /path/to/SCRATCH --prompt-file task.txt
 # big single-file writes: add --max-gen-tokens 4096 (default 1600 truncates them)
 # cloud escalation: --backend gemini --model pro (5x slower, 503 risk)
+# the loop frees its model on exit by default; --no-unload-after keeps it hot
 ```
 
 Rules: SCRATCH dirs only (it executes model shell — never a live repo); write the task like
@@ -341,6 +377,12 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   silently become a different model. `python3 "$SKILL/scripts/fleet_check.py"` compares
   current digests vs the accepted baseline (`--accept` after a deliberate update + re-gate);
   run it when anything smells off, and always after pulling updates.
+- **Nothing stays loaded that isn't working — by default, since 2026-08-29.** `gemini.py`
+  releases a model 60s after the last call; `smith_agent.py` unloads what it loaded when the
+  loop ends. Neither needs a flag. `python3 "$SKILL/scripts/model_unload.py"` is the manual
+  form: lists what Ollama (and, with `--lms`, LM Studio) is holding, and unloads it via
+  `--all` / `--model TAG`, with `--keep TAG` for anything deliberately pinned. See the
+  Residency bullet in the FLEET section for the overrides.
 - **Witness comparison is STRUCTURAL, not textual.** Python uses the stdlib `ast`; other
   languages use tree-sitter when installed — `pip install tree-sitter tree-sitter-language-pack`
   (OPTIONAL: absent, non-Python falls back to exact-match, the pre-2026-07-20 behaviour, and
