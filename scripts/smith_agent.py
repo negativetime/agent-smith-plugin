@@ -32,9 +32,14 @@ import urllib.error
 import urllib.request
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-# How long Ollama holds the model in memory after each turn. A tool loop is the worst
-# offender for stale residency: it can run for minutes, then leave 18 GB pinned for
-# another 5 by default. None = send nothing, Ollama's default applies. See --keep-alive.
+# How long Ollama holds the model in memory after each turn.
+#
+# Unlike gemini.py (which defaults to a short 60s residency), a tool loop deliberately
+# keeps the model hot BETWEEN turns and frees it once, at the end, via --unload-after
+# (on by default below). A short per-turn keep_alive would be actively wrong here: a
+# single run_command can take up to CMD_TIMEOUT (90s), so a 60s residency would evict
+# the model mid-loop and pay a cold load on the very next turn. Left None we send
+# nothing and Ollama's 5m applies, which comfortably covers the gap.
 KEEP_ALIVE = os.environ.get("SMITH_KEEP_ALIVE") or None
 
 READ_LIMIT = 16000     # chars of a file the model may see at once
@@ -478,13 +483,16 @@ def main():
                     help="task-shape label for the ledger / hebbian router "
                          "(default: app-build).")
     ap.add_argument("--keep-alive", default=None, dest="keep_alive", metavar="DUR",
-                    help="ollama backend: model residency after each turn. 0 = unload "
-                         "immediately (slow: reloads every turn), -1 = pin, or a duration "
-                         "like 30s/5m. Default: SMITH_KEEP_ALIVE, else Ollama's 5m. To "
-                         "free memory only once the loop is DONE, use --unload-after.")
-    ap.add_argument("--unload-after", action="store_true", dest="unload_after",
-                    help="ollama backend: on exit, unload every model this run loaded. "
-                         "Models already resident at startup are left alone.")
+                    help="ollama backend: model residency BETWEEN turns. Default "
+                         "SMITH_KEEP_ALIVE, else Ollama's 5m — long on purpose, since a "
+                         "run_command can take 90s and a shorter window would evict the "
+                         "model mid-loop. Memory is freed at the end by --unload-after.")
+    ap.add_argument("--unload-after", action="store_true", dest="unload_after", default=True,
+                    help="ON BY DEFAULT. On exit, unload every model this run loaded; "
+                         "models already resident at startup are left alone.")
+    ap.add_argument("--no-unload-after", action="store_false", dest="unload_after",
+                    help="leave this run's model resident when the loop ends (e.g. you "
+                         "are about to start another run on the same model).")
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
                          "(measured null result on qwen2.5-coder:14b, 2026-07-01)")
@@ -499,8 +507,8 @@ def main():
             KEEP_ALIVE = args.keep_alive
         if args.unload_after:
             _arm_unload_after()
-    elif args.keep_alive is not None or args.unload_after:
-        print("NOTE: --keep-alive/--unload-after apply to --backend ollama only; ignored.",
+    elif args.keep_alive is not None:
+        print("NOTE: --keep-alive applies to --backend ollama only; ignored.",
               file=sys.stderr)
 
     workdir = os.path.realpath(args.workdir)

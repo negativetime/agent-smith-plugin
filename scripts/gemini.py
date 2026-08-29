@@ -197,13 +197,22 @@ def api_key():
 # one-shots — the gym raises this via env for scout runs
 GEN_HTTP_TIMEOUT = int(os.environ.get("SMITH_GEN_TIMEOUT", "600"))
 
-# Residency: how long Ollama holds a model in RAM/VRAM after a call. Server default is
-# 5 minutes, so a one-shot draft keeps 12-18 GB pinned long after it answered — on the
-# 36 GB Mac that is what makes the NEXT call to a different model pay a 20-60s swap.
-# "0" unloads the moment the reply lands, "-1" pins forever, "30s"/"5m" are durations.
-# Left None we send nothing and Ollama's own default applies (unchanged behaviour).
+# Residency: how long Ollama holds a model in RAM/VRAM after a call.
+#
+# WE DO NOT USE OLLAMA'S DEFAULT. Its 5 minutes means one one-shot on the 30b holds
+# 18 GB for five minutes after the answer landed — on the 36 GB Mac that is the whole
+# residency problem, and it is the NEXT call that pays for it in a 20-60s swap.
+#
+# 60s is the compromise, and the reason it is not 0: Claude fires several one-shots in a
+# row, and unloading the instant each reply lands would make every call in a chain pay a
+# full cold load (20.6s measured on gpt-oss:20b at 32k). A minute is long enough that a
+# chain still hits the model hot, short enough that memory comes back promptly once the
+# work stops. Override per call with --keep-alive, or for a whole session with
+# SMITH_KEEP_ALIVE: "0" unloads as each reply lands, "-1" pins, "5m" restores Ollama's
+# old behaviour, and any duration string works.
 OLLAMA_BASE = "http://localhost:11434"
-KEEP_ALIVE = os.environ.get("SMITH_KEEP_ALIVE") or None
+DEFAULT_KEEP_ALIVE = "60s"
+KEEP_ALIVE = os.environ.get("SMITH_KEEP_ALIVE") or DEFAULT_KEEP_ALIVE
 
 
 def _keep_alive_value(v):
@@ -442,7 +451,9 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
     log(f"backend: ollama  model: {model}  (local · free · unlimited)")
     if KEEP_ALIVE is not None:
         log(f"keep_alive: {KEEP_ALIVE}"
-            + ("  (unloaded from memory now)" if str(KEEP_ALIVE) in ("0", "0s") else ""))
+            + ("  (unloaded from memory now)" if str(KEEP_ALIVE) in ("0", "0s")
+               else "  (frees itself after that)" if KEEP_ALIVE == DEFAULT_KEEP_ALIVE
+               else ""))
     pe, ec = resp.get("prompt_eval_count"), resp.get("eval_count")
     if pe is not None or ec is not None:
         log(f"tokens: prompt={pe} output={ec}")
@@ -1363,8 +1374,8 @@ def main():
     ap.add_argument("--keep-alive", default=None, dest="keep_alive", metavar="DUR",
                     help="ollama backend: how long the model stays in memory after this "
                          "call. 0 = unload as soon as the reply lands, -1 = pin, or a "
-                         "duration like 30s/5m. Default: SMITH_KEEP_ALIVE, else Ollama's "
-                         "own 5m.")
+                         "duration like 30s/5m. Default: SMITH_KEEP_ALIVE, else 60s "
+                         "(NOT Ollama's 5m — we don't leave 18 GB pinned that long).")
     ap.add_argument("--unload-after", action="store_true", dest="unload_after",
                     help="ollama backend: when the run ends, unload every model this run "
                          "loaded. Models that were ALREADY resident when it started are "
