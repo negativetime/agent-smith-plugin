@@ -43,6 +43,11 @@ inputs (`--file` — let the backend read the 200 pages, not you), first-draft g
 correctness-critical reasoning, security, final review + integration.
 **Break-even:** don't offload small work — overhead exceeds savings below ~50 KB input /
 a page or two of output (measured; see [references/measured-results.md](references/measured-results.md)).
+**Route elsewhere — persistent corpus:** when the corpus is one Josh will interrogate
+*repeatedly* (not one-shot digested), or he wants an audio overview of it, use the
+`notebooklm` skill instead of `--file`/`long-digest` — a notebook persists and re-answers,
+a `gemini.py` call is one-and-done. ⚠ NotebookLM runs do NOT touch `data/usage.jsonl`, so
+`gap_report.py` cannot see them — say so in the report or the route reads as "Claude did it".
 
 ## Task playbooks
 
@@ -133,9 +138,21 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 - **Quality code / app builds:** `gpt-oss:20b` (12 GB) — TRUSTED code-gen/struct/edits/
   app-builds (double perfect sweep). Review watch-item: reasoning residue (commented-out
   debug prints, dead branches, doc claims for absent code).
-- **Vision + design:** `gemma4:26b` (17 GB) — auto-picked when images present. Design-crown
-  holder (discipline: claims match code). **Vision rule: tile tall scrolling captures —
-  small text on full-page images gets confidently invented.**
+- **Vision + design: `gemma4:26b` REMOVED 2026-08-16** (18 GB reclaimed, Josh's call). It held
+  the design crown and was the image auto-pick, but had gone 4 weeks unused and the vision-v1
+  suite measured it INVENTING 4 fields on a tall page (20% recall in 6s — it wasn't reading)
+  where `qwen3-vl:4b` scored 100% at a fifth the size. **`gemini.py`'s image auto-pick now
+  resolves to `qwen3-vl:4b`.**
+- **DESIGN lane RE-GATED 2026-08-16 — `gpt-oss:20b` takes it (20.0/24 blinded).** 4-way
+  re-gate after gemma4 left: gemini-pro 22.5 · **gpt-oss:20b 20.0** · qwen3-coder:30b 15.0 ·
+  gemini-flash incomplete (503). So local design work goes to `gpt-oss:20b`, **not**
+  `qwen3-coder:30b`, which is weak here (dead branches, falsely-documented exceptions, a
+  printed success message for work it never did) — it holds the SPEED lane, not this one.
+  ⚠ Known, REPLICATED defect: gpt-oss:20b writes *int-only `consume` on a float bucket* in
+  rate-limiter-shaped code — same flaw as 07-04, six weeks apart. Review numeric-boundary
+  code from it. ⚠ `--tag design` still defaults to **flash**, deliberately: flash TIED pro
+  (11.5) on the only task both finished, so there is no measured basis for a pro override.
+  Pass `--model pro` by hand when a design task deserves the ceiling.
 - **Vision pre-screen — TRUSTED (2026-07-12, 2-consecutive gate):** `qwen3-vl:4b` (3.3 GB
   dl, ~8 GB loaded, 256k ctx) — co-resides with gpt-oss:20b. Run 1: **9/9** (incl. tiny-text
   OCR on a dense SC editor); run 2: **8/9 on fresh corpus incl. a TALL 5265px scroll** where
@@ -152,7 +169,10 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
   from input length (Ollama silently truncates otherwise). Use for transcripts/contracts/
   logs too private for free cloud tiers; beyond ~130k tokens split it or use `--backend
   gemini` (1M). Caveat: the witness re-run doubles the cost of a long-prompt call.
-- **Lighter backup:** `qwen2.5-coder-smith:14b` (9 GB, our gym-gated fine-tune).
+- **Lighter backup: REMOVED 2026-08-16.** `qwen2.5-coder-smith:14b` (9 GB, our gym-gated
+  fine-tune) was deleted after 18 ledger runs and zero good/bad verdicts in either
+  direction — an unverified route occupying disk, not a trusted one. Re-pull and re-earn
+  a slot with real verdicts before routing to it again.
 - **Bench / second opinion:** `agents-a1` (21 GB, trusted everywhere, no lane) — decorrelated
   lineage; premium consensus/witness third voice. `llama3.2:3b` = tiny text floor only.
 - **Cloud model choice:** `flash` for bulk text; **`pro` for code/design/research synthesis**
@@ -248,6 +268,19 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   defaulting to flash, which scored 0g/1b, MISROUTED; pro scores 9g/1b). Passing
   `--model flash` still works but logs a route warning. The remaining gap is volume, not
   model choice: 2% delegated as of 07-25 — the blocker is habit, not tooling.
+- **Research on z.ai — SECOND LANE, NOT A REPLACEMENT (measured 2026-08-10).** z.ai's own
+  `web_search` tool works on the Coding Plan endpoint and is wired to `--search` on the
+  `openai` backend (z.ai hosts only; `SEARCH_MIN_TOKENS=8000` floor, since grounded runs
+  put ~89% of the completion budget into hidden `reasoning_content`). But on a 10-question
+  current-release eval with ground truth read from primary sources
+  (`evals/research_grounding_eval.py`): **gemini-pro 10/10, glm-5.2 + web_search 7/10.**
+  Every GLM miss was the same failure — *stale pre-training fact, real citations attached*
+  ("Python 3.14.0, released October 7 2025 [2,3]" vs the true 3.14.7 / 2026-08-05).
+  Retrieval was fine (5.0 sources/question vs Gemini's 2.6); it answered around them.
+  So: **`--tag research` stays on gemini-pro.** z.ai only takes research when Gemini's
+  monthly cap blows — `gemini.py` now reroutes automatically on a cap-shaped 429 and
+  prints an UNVERIFIED banner; re-verify every version and date it returns.
+  `SMITH_NO_FALLBACK=1` disables the reroute. Transient 429s are NOT treated as caps.
 - **Route BLOCK:** `doc-format @ gpt-oss:20b` is 0g/**3b** — do not send doc-format there
   until it passes an agent-gym task. Use gemini-pro (5-streak, LIGHT REVIEW — first earned
   tier), or gemma4:26b / qwen3-coder:30b (2g/0b each).
@@ -332,8 +365,15 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   splits the result two ways: **UNUSED** (Claude did it while a trusted route sat idle) and
   **MISROUTED** (delegated to a model the ledger scores badly at that shape). Standing
   measurement (unchanged 07-19 → 07-25): **web research 2% delegated** — 1,467 Claude calls
-  vs 31 fleet runs while `research @ gemini-pro` sits at 9g/1b; read-only subagent fan-out
-  0% of 663 Agent spawns. Ranked routes now live in "DEFAULT-TO-LOCAL routes" above. Run it monthly, on gym day, or whenever quota gets tight;
+  vs 31 fleet runs while `research @ gemini-pro` sits at 9g/1b.
+  **⚠️ Its Agent-call count OVERSTATES the fan-out gap — corrected 2026-08-10.** It counts
+  every `Agent` spawn, but of 482 in 30d, 130 were `code-reviewer` and ~225 were
+  `subagent-driven-development` writing code ("Implement Task 2: …"). The genuinely
+  read-only, delegable population is **~100–120, not 482** — so read that row as an upper
+  bound and judge the raw fleet run count, not the ratio. (Same class of error as the
+  ratio drift: fleet counts are ledger-lifetime, Claude counts a sliding 30d, so the
+  percentage climbs on its own as a busy month ages out.)
+  Ranked routes now live in "DEFAULT-TO-LOCAL routes" above. Run it monthly, on gym day, or whenever quota gets tight;
   `--refresh` re-mines the transcripts first. Caveat it prints itself: tags only exist on runs
   since 2026-07-18, so pre-tag history is recovered by per-shape heuristics and ratios read as
   a floor.

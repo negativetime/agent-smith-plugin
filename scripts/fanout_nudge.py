@@ -33,6 +33,34 @@ REPEAT_EVERY = max(1, int(os.environ.get("SMITH_FANOUT_NUDGE_EVERY", "3")))
 STATE_DIR = "/tmp/agent-smith-nudge"
 ELIGIBLE_TYPES = {"Explore", "general-purpose", ""}
 
+# An explicit read-only DECLARATION outranks everything below it. Measured the
+# hard way (twice in one hour, 2026-08-10): keyword matching cannot see negation.
+# "Read-only investigation. Do NOT submit, release, or commit" was silenced by the
+# `commit` marker, and "Do not modify any files" by `modify` — prohibitions read as
+# intent. Any keyword rule over free text needs this precedence, not more keywords.
+DECLARED_READONLY = (
+    "read-only", "read only", "do not modify", "don't modify", "do not edit",
+    "don't edit", "no edits", "without modifying", "do not write", "don't write",
+    "do not change", "don't change", "make no changes",
+)
+# Any hint of mutation kills the nudge outright — false silence costs one
+# undelegated read, false noise costs the credibility of every future nudge.
+MUTATING_MARKERS = (
+    "implement", "fix the", "fix this", "fix a ", "write the", "write a ",
+    "create the", "create a ", "edit ", "refactor", "migrate", "port the",
+    "apply the", "patch ", "rename", "delete ", "remove the",
+    "add a ", "add the", "build the", "wire up", "make the change",
+    "you are implementing", "modify the", "commit the",
+)
+# …and it must positively look like reading, not merely lack write-words.
+READONLY_MARKERS = (
+    "read-only", "read only", "do not modify", "don't modify", "summar",
+    "find all", "search for", "locate", "investigate", "analyz", "audit",
+    "which files", "where is", "identify", "list all", "trace", "map the",
+    "look up", "research", "survey", "enumerate", "compare", "gather",
+    "extract", "digest", "look for", "vet ",
+)
+
 
 def main():
     try:
@@ -48,6 +76,23 @@ def main():
     subagent_type = str(tool_input.get("subagent_type") or "")
     if subagent_type not in ELIGIBLE_TYPES:
         return 0
+
+    # MEASURED 2026-08-10: this hook fired 81/81 times and was ignored 81/81 times
+    # — and ignoring it was mostly CORRECT. `subagent-driven-development` spawns
+    # `general-purpose` agents to WRITE code ("Implement Task 2: …"), which looked
+    # identical here to a read-only fan-out. Of 348 dispatches that passed the
+    # checks above, ~225 were mutating; the real read-only gap is ~100, not 482.
+    # Nudging an implementation dispatch to a model with no repo access is bad
+    # advice, and bad advice at the decision moment trains the reader to skim past
+    # the good advice too. So: read the prompt, and stay quiet unless it's read-only.
+    text = " ".join(str(tool_input.get(k) or "") for k in ("description", "prompt"))
+    low = text.lower()
+    if not any(w in low for w in DECLARED_READONLY):
+        # No explicit declaration, so fall back to reading the verbs.
+        if any(w in low for w in MUTATING_MARKERS):
+            return 0
+        if not any(w in low for w in READONLY_MARKERS):
+            return 0  # silence is the default, not the exception
 
     session = str(payload.get("session_id") or "nosession").replace("/", "_")[:80]
     n = 1

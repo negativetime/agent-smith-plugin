@@ -1,0 +1,329 @@
+[
+ {
+  "id": "python",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "As of August 2026, the latest stable release of Python is version 3.14.7. This update can be downloaded directly from the official Python website.",
+  "n_src": 2,
+  "srcs": [
+   "wikipedia.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFyr_Plbqen8YJBgmuYXOR0jx0yRLtLB6yUJY3eiN1j1OZYzxSgV4Y2D8K3DA769r8p7MstYZ87Y4KKPG9bjzvPP6NpEQxbbu7yg3SGpnCcRA6WKBE-j-wq1SaaU3lNX9YuFICPvnESknV_XbE8TWlUAA==",
+   "python.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHP1IWCcMmlaRDka0hGsAb9bwL3NSGyk95F8QmmCn3OWXLkTxNpJ5MWXjUtZc59ffoI5HK4u-YAl4AIZaPKqW94iLmwzj8Da05v7rvPzgdTGP4Xzi3PJW4="
+  ]
+ },
+ {
+  "id": "python",
+  "lane": "glm+zai",
+  "ok": false,
+  "hit": false,
+  "wrong": [],
+  "empty": false,
+  "contradicts": true,
+  "answer": "The latest stable release of Python is version 3.14.0 [2, 3]. This version was officially released on October 7, 2025 [2].",
+  "n_src": 5,
+  "srcs": [
+   "Status of Python versions - Python Developer's Guide  (2026\u5e745\u670827\u65e5)",
+   "Python documentation by version",
+   "The latest Python version: Python 3.14 - Liquid Web"
+  ]
+ },
+ {
+  "id": "swift",
+  "lane": "glm+zai",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": true,
+  "answer": "The latest released version of Swift is 6.3.3 [4]. It was officially released on June 30 [4].",
+  "n_src": 5,
+  "srcs": [
+   "Swift 6.3 Released | Swift.org  (2026\u5e743\u670824\u65e5)",
+   "Swift Version",
+   "Swift (programming language) - Wikipedia"
+  ]
+ },
+ {
+  "id": "node",
+  "lane": "glm+zai",
+  "ok": false,
+  "hit": false,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The current Active LTS version of Node.js is 24, with version 22 serving as Maintenance LTS as of July 2026 [4].",
+  "n_src": 5,
+  "srcs": [
+   "Node.js Releases",
+   "What are the differences between Long Term Support (LTS) and ...  (Nov 11, 2015)",
+   "How to check Node version - RisingStack Engineering  (May 29, 2024)"
+  ]
+ },
+ {
+  "id": "node",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "As of August 2026, the current Active Node.js LTS (Long Term Support) version is Node.js 24, with the most recent release being version 24.19.0. This is confirmed by the official Node.js release schedule and download pages.",
+  "n_src": 2,
+  "srcs": [
+   "nodejs.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEmk5a6icHBfijbjn5eZuwE2Aelrrx2RuldQ4N-v0fWQUCqu7ToGE8oAP1CXtXMPDIoPEzjz4_pv5Y3VXtgpX5Ky17m0WVqNEB1VEy9kX9wpu65o8C-g4n5MTNlfh2GcuzA4BY=",
+   "nodejs.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEXUG4srChMgWXak7anbybHvdlUB03AB0cHIQQRyi3XW4p8o3TtrF6D0eFHAyAPVFXpgnWbKC86KZdJa8uFpGprIVobYpMTeiv_w4Q2X8yTJNEYX0U="
+  ]
+ },
+ {
+  "id": "go",
+  "lane": "glm+zai",
+  "ok": false,
+  "hit": false,
+  "wrong": [
+   "1\\.25"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released version of Go is 1.25.6 [4].",
+  "n_src": 5,
+  "srcs": [
+   "Release History - The Go Programming Language",
+   "Go | endoflife.date  (21 Jul 2026)",
+   "Golang 1.25: What is new? - YouTube  (8 Sep 2025)"
+  ]
+ },
+ {
+  "id": "swift",
+  "lane": "gemini-pro",
+  "ok": false,
+  "hit": true,
+  "wrong": [
+   "6\\.4"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest stable released version of the Swift programming language is 6.3.3, which was made available in June 2026. While Swift 6.4 is currently in beta testing, version 6.3.3 remains the most recent production-ready release according to the official Swift blog and Apple's Xcode release tracking.",
+  "n_src": 2,
+  "srcs": [
+   "xcodereleases.com: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEoHBwwlM95rMZBTWJDupYx1NwcVLZHddS9dLsx3N-4ynqrvO0yxd4gqhNNRHTEGYIbH8N5HCBGgPSJ0cwYSOk_P5RnnUqNDicV6afsX1xjIA==",
+   "swift.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEgT4EqsKw9s9HYXGkUnIiLvkDPutL9kK-wFpdKAAhA8XTEOG0bRKAh9FSeZMkEoPKPYqIN_AB35beaOeA47HIJ9j-n2_E5uyV0B6VLRw=="
+  ]
+ },
+ {
+  "id": "postgres",
+  "lane": "glm+zai",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest stable release of PostgreSQL is version 18.4 [3, 4].",
+  "n_src": 5,
+  "srcs": [
+   "Release Notes - PostgreSQL",
+   "PostgreSQL: The world's most advanced open source database",
+   "PostgreSQL - Wikipedia"
+  ]
+ },
+ {
+  "id": "rust",
+  "lane": "glm+zai",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released stable version of Rust is 1.97.1 [2, 3].",
+  "n_src": 5,
+  "srcs": [
+   "Rustup latest version number!!! \u00b7 Issue #2682 - GitHub  (2021\u5e742\u670827\u65e5)",
+   "Rust Changelogs: Rust Versions",
+   "Announcing Rust 1.97.1 - Rust Blog  (2026\u5e747\u670816\u65e5)"
+  ]
+ },
+ {
+  "id": "rust",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released stable version of the Rust programming language is 1.97.1, which was published on July 16, 2026. This version number and its release date are officially documented on the Rust Programming Language Blog.",
+  "n_src": 2,
+  "srcs": [
+   "rust-lang.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHtO_8jpGOeljawBuVvYBiv1fkil2YndIISosminlptYW-mJD1i_W6YGWL_UXPzTSpabFGEf3VqmjQaCVX4eocXcB-XtoppH0Y7ChTIQAbOijnuCaMGnjxxCIma1KhjmizD",
+   "rust-lang.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFoCgbqnuofxjjYa4pKvN_lzMO3_uv1BjqIE4Su0Mlmuf8acbPyixQsDyi1KxM5fw0NoddX392FK_ivQsHeFcRyDDz20OIYDA5nrc6M6j15JI0="
+  ]
+ },
+ {
+  "id": "postgres",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest stable release of PostgreSQL is version 18.4, which was officially published on May 14, 2026. While PostgreSQL 19 is currently in its beta testing phase, version 18.4 remains the most up-to-date stable release recommended for production environments.",
+  "n_src": 3,
+  "srcs": [
+   "postgresql.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFKJqSlFEdXxQcWokBfAB3WCOso7IJQQLVFZ3d3e9vWJ5Udg6TIWuuvFXPXewaR3ZVBcJlRFqXqIP6RpfQ_NYMDTjkDqzi5xYw-ya5HlUMUpp0vRarRr4xpq0H1yI1lJqw_3vq-BZEw0GOtknTkX5g_gCQGUqW-da4PiInWUYlnFG_guILwkC7wMXop1-OCgJ4=",
+   "postgresql.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFAmJbU8c9pSVg1pb9HOaKCXzf3V-pDv1Q5YqVZgbpaOPtUZkiuMfKobaqaCbJWyx503T8-QnZDwwz_lpRtJp1eLNO-5T5ZG7xa9BAnLGndHgUkBMPENbwfnVAl_JMZgld_1mc=",
+   "postgresql.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHxqJcMRi-dUtAcAvrdjbU9zV_LmX1dIVS_OD7DXFKD09gmAwEWOg2HRKKHnStedrUYn9RuJ491NRbbz_8doTT0i43-dR4pUC9YNdtzfnjZBQZYyWCtIf3zR_WDHf6V80qnhb4ck6i3SB6lGosb3ivPNfSCK10d5tlb-rvQHOg="
+  ]
+ },
+ {
+  "id": "k8s",
+  "lane": "glm+zai",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest stable released version of Kubernetes is v1.36.3 [2].",
+  "n_src": 5,
+  "srcs": [
+   "Releases - Kubernetes",
+   "Releases \u00b7 kubernetes/kubernetes - GitHub",
+   "Supported Versions of Kubernetes - Oracle Help Center  (2026\u5e747\u670830\u65e5)"
+  ]
+ },
+ {
+  "id": "k8s",
+  "lane": "gemini-pro",
+  "ok": false,
+  "hit": true,
+  "wrong": [
+   "1\\.37"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "As of August 2026, the latest stable minor release of Kubernetes is version 1.36, with the most recent patch being version 1.36.3. Official Kubernetes documentation and GitHub repository data confirm this is the current active release series, while version 1.37 is scheduled as the upcoming release.",
+  "n_src": 3,
+  "srcs": [
+   "kubernetes.io: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF4aoIdWC4IzJdHZZrigv_rs2k6L5goLbAK1HqKGksiPtUQiPe4cAMtJXuggDZFhP9Zvkuj4dibethzd_aICEaJ8T6DYbxPAcWDcre9C0Z2OyC7xLZ_",
+   "googlesource.com: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHjh9gp8f1dQ0m-HUZ9-aI9fE5i8isDAb6M05pRPXPtRax_80LQY4S5hakujUd9rC-VxYZbLtgyRbWOTH192mZs3Vw-aBfxcBeZsc555KegPkBSeRVI6XRRcJKKp9KH7-2Ah-Sirn2lXKQkUsoTwflZ_gYCNreGcemFhLJgqmoVFzAFJmwFCZGM6aPVdbSG8KgUm8OdAAyKPpPIkZH6jvezlw==",
+   "kubernetes.io: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF4aoIdWC4IzJdHZZrigv_rs2k6L5goLbAK1HqKGksiPtUQiPe4cAMtJXuggDZFhP9Zvkuj4dibethzd_aICEaJ8T6DYbxPAcWDcre9C0Z2OyC7xLZ_"
+  ]
+ },
+ {
+  "id": "django",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest official release of Django is version 6.1, which was published on August 5, 2026. This stable release introduces new features, such as field-level fetch modes, alongside several security patches.",
+  "n_src": 3,
+  "srcs": [
+   "djangoproject.com: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGi6-g5CvPlIvgkodXSUHCco5Xla1y_fcqK9hTx9dqw1i6tAJ3BStdKoBz_rwk49ODHJ7uOfnYofs8awvi_BW0FuUjJsMCXmaOUjlm3EPC4b934WXPCB3IMomuiz99ZkfwGnAnAKE-Rjg==",
+   "djangoproject.com: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFEouVho14c12XMxNCA_QuK43Aq9R19ah581-z6vFGRvWLyyqjqfmP5ZBHH_mqhc_dgyD8eEtIXH6pt-jXymfZq2OOzFnDHg9FFsCJOdV9csf-bFFIeFNXjmY1fnA==",
+   "daily.dev: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQE6yBDb48i2yEasNqqBnuN0sScdASBHZHXU3p_2p0pVjkbseldV1x0GXS2uLxBVcsF64eQcGLklLBTmBGPI13rNWNRo6nzUH3g5n_M3mVUw4og5Cu0OuApKATncU6Uqo3z4yZnCzAX24rZP79KUS5ml96V4lCRbUywh9tMTgRuNjQFC7MgKkvfXAZPV-mXof0eNqLkEZWWjDQI8r-EiC8NHE8ijm0i4"
+  ]
+ },
+ {
+  "id": "go",
+  "lane": "gemini-pro",
+  "ok": false,
+  "hit": true,
+  "wrong": [
+   "1\\.27"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "As of August 11, 2026, the latest stable released version of Go is **1.26.5**, which was published on July 7, 2026. While Go 1.27 is currently in its release candidate phase and a 1.26.6 security patch is scheduled for release later today, version 1.26.5 remains the most recent stable build available on the official Go releases page.",
+  "n_src": 4,
+  "srcs": [
+   "go.dev: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH9Bq7Yi7GPHPGLy29oePDMrXpOV5XaQ0m3VIKQKFyDDT7ZGeU8dJiqULGSq6ApIs8WGVh1IavY68jyuMJU2LTsb-1BZQ0fgxAL_Y8Fcx15IOJMDxUL",
+   "go.dev: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH9gXO9rnTdty2sK1If-r5rfmwA_FkTxbPscsTUeojDhIWUD0FuMWwKEL1KBL1nIpjXgfC3g3KFie5LQWexqxoOb3QRNshy6b8QkDPlXOz6",
+   "freenode.net: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFpvvGlwQloxmlRRiukSBoBTqL0FuNqgOaSe74wIYOPTQkAcdtlP7YPlj7s7OX2xU_sfY0eFMwDdzIc3zaaDb4--CvhkDy0-919O97t7gUcm9zmNIJ4H4kxhr1AUBhkOfXCvYRZUT16dMh73S5Dweua9Q9Uv9EgcIIYQZjXi4woG0WxvaxWtPY="
+  ]
+ },
+ {
+  "id": "django",
+  "lane": "glm+zai",
+  "ok": false,
+  "hit": false,
+  "wrong": [
+   "\\b5\\.\\d"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest official release of Django is version 5.2, which is designated as a long-term support release [1].",
+  "n_src": 5,
+  "srcs": [
+   "Django 5.2 release notes  (2025\u5e744\u67082\u65e5)",
+   "Introducing DjangoVer - James Bennett  (2024\u5e7411\u670818\u65e5)",
+   "How to release Django"
+  ]
+ },
+ {
+  "id": "ruby",
+  "lane": "glm+zai",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The current stable release of Ruby is version 4.0.6 [1, 4]. It was released last month and is the latest distribution available for download.",
+  "n_src": 5,
+  "srcs": [
+   "Download Ruby",
+   "Is Your Ruby Version Still Supported? A Maintainer's Guide to ...  (2026\u5e744\u67086\u65e5)",
+   "Ruby on Rails new release updates"
+  ]
+ },
+ {
+  "id": "ruby",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The current stable release of Ruby is version 4.0.6, which was officially released on July 14, 2026. You can verify this and download the latest version directly from the official Ruby programming language website at ruby-lang.org.",
+  "n_src": 2,
+  "srcs": [
+   "ruby-lang.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEPEyw4AEYQCQLkB1bQKnB9-WnzQvxLvTkBb7GzpxtM6OjR0SoWlWyUeChG1ScSyWqDar511QoUHY-8GDGdHMM3KPAnmt-R6cQsfo-UHV1BWs2DQ_BboQd72TmYkLne_8sImef0kvf7xqCPGDXJjxFboukQ3biopw==",
+   "ruby-lang.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHvodwWYCvDtA5AwwpMLFHyLJddy-r3L6XmkiM5me9URZJasDOsuCM5S-k1_BHUBHy7LnEvCLCC1CFONJ4eXXM00iKigQRK0XD60kFUljwmZF0F97ww736X8xIeizM="
+  ]
+ },
+ {
+  "id": "zig",
+  "lane": "gemini-pro",
+  "ok": true,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest tagged release of the Zig programming language is version 0.16.0, which was published in April 2026. There is no stable 1.0 release yet, as the language currently remains in active pre-1.0 development.",
+  "n_src": 3,
+  "srcs": [
+   "ziglang.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHo8hwNd_Ao2ErKKOf-mouGzgkgNZ4FFSapip4TkzeexVHKXdRd5SfRbZR0mYi0-WSiuMxQfrMmmCcBo_YNkbrDWPQdhQiqF1krkv8z5oxslidQzJTdsq6oU9RvZZzP",
+   "jetbrains.com: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGcOgJDZWa1dGjAo8-WBp21khaOtLft4JnkFOPtTLliVVk5mPG_mb9_YssLyVR1dA3-krlj50bdpBhUkt4mkbW3dfJXC0mPbU5mlQaaPvnUr99oDSk62cPkh5R3LwrouSbTKuswKg6mPHuDCVhtUjw5GGoprxPB",
+   "wikipedia.org: https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFzKOFubwc7vCbSOrup7cIpiEV3OJ7TsfSJ6lOho6zbvs-NFEc2DzUGU_F6Gl4f-COmb3cW_Ad3akkrd3m0jof97hdFV8fRhYMQtxDi8AIzKNM2sLE4okpyW5Lko9NUdEsmkBkKUgQcViKPz0BM"
+  ]
+ },
+ {
+  "id": "zig",
+  "lane": "glm+zai",
+  "ok": false,
+  "hit": true,
+  "wrong": [
+   "\\b1\\.0\\b.*(stable|released)"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest tagged release of Zig is version 0.16 [4]. There is currently no 1.0 stable release, as the language is not yet production-ready and still has a long way to go before reaching that milestone [1, 2].",
+  "n_src": 5,
+  "srcs": [
+   "When will Zig reach release 1.0, ready for production applications?  (2025\u5e744\u670827\u65e5)",
+   "What do you personally expect Zig 1.0.0 to mean? - Reddit  (2026\u5e744\u670826\u65e5)",
+   "What to Expect from Release Month - Zig Programming Language  (2025\u5e741\u670817\u65e5)"
+  ]
+ }
+]

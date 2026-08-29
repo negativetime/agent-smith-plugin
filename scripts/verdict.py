@@ -14,6 +14,7 @@ added to your eval harness before delegating that shape again.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import sqlite3
@@ -81,6 +82,37 @@ def main():
            "ref_script": target.get("script")}
     if args.tag:
         rec["tag"] = args.tag
+
+    # ---- incident id -------------------------------------------------------
+    # One BUG graded across N runs is one incident, not N failures. Measured
+    # 2026-08-15: `translate` carried 20 bad rows with a byte-identical note, all
+    # written in the same second — a back-fill over runs from three days earlier.
+    # Every other tag was 1.0x. Routing weights and gap_report read these counts,
+    # so that single incident was suppressing the route 20x harder than it earned.
+    # Identical note text => same incident, so downstream can weigh events not rows.
+    if args.note:
+        norm = " ".join(args.note.split()).casefold()
+        rec["incident"] = hashlib.sha1(norm.encode()).hexdigest()[:10]
+        # `runs` above deliberately excludes verdict rows, so re-scan for prior verdicts.
+        prior = []
+        with open(LEDGER) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(r, dict) or r.get("script") != "verdict":
+                    continue
+                note = r.get("note") or ""
+                same = (r.get("incident") == rec["incident"] if r.get("incident")
+                        else " ".join(note.split()).casefold() == norm)
+                if same and note:
+                    prior.append(r)
+        if prior:
+            rec["bulk_of"] = prior[0].get("ts")
+            print(f"note: identical to {len(prior)} earlier verdict(s) — recorded as the "
+                  f"SAME incident ({rec['incident']}), first seen {prior[0].get('ts')}. "
+                  f"Routing weights count incidents, not rows.", file=sys.stderr)
     with open(LEDGER, "a") as f:
         f.write(json.dumps(rec) + "\n")
     try:

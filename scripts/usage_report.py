@@ -7,6 +7,7 @@
     python3 usage_report.py --unreviewed # the review queue: runs with no verdict
 """
 import argparse
+import hashlib
 import json
 import os
 from collections import Counter
@@ -146,18 +147,35 @@ def main():
         print("by project:")
         for proj, n in by_project.most_common(8):
             print(f"  {n:4}  {proj}")
-    routes = {}  # (tag, model) -> [(run_ts, verdict), ...] judged runs only
+    routes = {}  # (tag, model) -> [(run_ts, verdict, incident), ...] judged runs only
     for r in all_rows:
         v = verdicts.get(run_key(r))
         if not v or v.get("verdict") not in ("good", "bad"):
             continue
         pair = (v.get("tag") or "untagged", r.get("model") or "?")
-        routes.setdefault(pair, []).append((r.get("ts") or "", v["verdict"]))
+        # One BUG graded across N runs is ONE event. Pre-2026-08-15 verdicts predate the
+        # `incident` field, so fall back to hashing the note text — which is exactly how
+        # the inflation was found: 20 `translate` bad rows, ONE byte-identical note, all
+        # written in the same second. Counting rows suppressed that route 20x too hard.
+        note = " ".join((v.get("note") or "").split()).casefold()
+        incident = v.get("incident") or (
+            hashlib.sha1(note.encode()).hexdigest()[:10] if note else None)
+        routes.setdefault(pair, []).append((r.get("ts") or "", v["verdict"], incident))
     if routes:
-        print("routing weights (hebbian):")
+        print("routing weights (hebbian) — counting INCIDENTS, not rows:")
         for (tag, model), judged in sorted(routes.items(),
                                            key=lambda kv: (-len(kv[1]), kv[0])):
             judged.sort()  # run-ts order; unreviewed runs never enter the chain
+            rows_n = len(judged)
+            seen, deduped = set(), []
+            for ts, verdict, inc in judged:
+                if inc is not None and inc in seen:
+                    continue          # same incident already counted for this route
+                if inc is not None:
+                    seen.add(inc)
+                deduped.append((ts, verdict))
+            collapsed = rows_n - len(deduped)
+            judged = deduped
             goods = sum(1 for _, verdict in judged if verdict == "good")
             bads = len(judged) - goods
             streak = 0
@@ -168,7 +186,8 @@ def main():
             tier = ("trusted-shape (spot-check only)" if streak >= 10
                     else "light review" if streak >= 5 else "full review")
             print(f"  {tag} @ {model}: {goods} good, {bads} bad, "
-                  f"{goods/len(judged):.0%} quality, streak {streak} -> {tier}")
+                  f"{goods/len(judged):.0%} quality, streak {streak} -> {tier}"
+                  + (f"   [{collapsed} duplicate row(s) collapsed]" if collapsed else ""))
     if witnesses:
         agree = sum(1 for w in witnesses if w.get("agree"))
         print(f"witness drift sensor: {len(witnesses)} sampled, "

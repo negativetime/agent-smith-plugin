@@ -33,6 +33,7 @@ import urllib.request
 
 BASE = "https://generativelanguage.googleapis.com"
 INLINE_LIMIT = 15 * 1024 * 1024  # files larger than this go through the Files API
+SEARCH_MIN_TOKENS = 8000  # floor for z.ai grounded search; see call_openai_compat
 
 # Friendly aliases. Pass any real model name through unchanged.
 ALIASES = {
@@ -203,8 +204,21 @@ def http(url, method="GET", data=None, headers=None, timeout=300):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def http_json(url, method="GET", body=None, headers=None, timeout=300, retries=4):
-    """POST/GET JSON with retry/backoff on 429 + 5xx."""
+class QuotaExhausted(Exception):
+    """Gemini refused for quota / monthly-spend-cap reasons (not a transient 429).
+    Raised only when the caller passed fallback_ok=True, so it can reroute instead
+    of dying. The 2026-07-28 cap outage killed the research lane for four days."""
+
+
+_CAP_MARKERS = ("RESOURCE_EXHAUSTED", "spending cap", "quota", "billing")
+
+
+def http_json(url, method="GET", body=None, headers=None, timeout=300, retries=4,
+              fallback_ok=False):
+    """POST/GET JSON with retry/backoff on 429 + 5xx.
+
+    fallback_ok=True: a quota/spend-cap refusal raises QuotaExhausted IMMEDIATELY
+    instead of burning four backoff rounds on a cap that won't lift for days."""
     h = {"Content-Type": "application/json"}
     h.update(headers or {})
     payload = json.dumps(body).encode() if body is not None else None
@@ -215,6 +229,9 @@ def http_json(url, method="GET", body=None, headers=None, timeout=300, retries=4
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             err = e.read().decode(errors="replace")
+            if fallback_ok and (e.code in (429, 403)
+                                and any(m.lower() in err.lower() for m in _CAP_MARKERS)):
+                raise QuotaExhausted(f"HTTP {e.code}: {err[:300]}")
             if e.code in (429, 500, 503) and attempt < retries:
                 log(f"  [retry] HTTP {e.code} (attempt {attempt + 1}/{retries}); waiting {delay:.0f}s")
                 time.sleep(delay)
@@ -416,6 +433,7 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
     except urllib.error.URLError as e:
         log(f"ERROR: can't reach Ollama ({e}). Start it: `ollama serve`, then `ollama pull {model}`.")
         sys.exit(1)
+    _note_reported_model(resp)
     text = resp.get("message", {}).get("content", "")
     log("\n--- ollama meta ---")
     log(f"backend: ollama  model: {model}  (local · free · unlimited)")
@@ -734,10 +752,50 @@ def _archive_output(ledger_path, rec, text):
         return None
 
 
+# What the endpoint SAID it ran, as opposed to what we asked for. Set by whichever
+# backend actually made the call; consumed by _ledger().
+#
+# 2026-08-14: z.ai rolled GLM-5.3 out to every Coding Plan subscriber and retired 5.2 in
+# place — asking for `glm-5.2` now returns `glm-5.3`. The ledger recorded the REQUESTED
+# name, so every code-draft/long-digest delegation kept logging "glm-5.2" while running on
+# a different model, and the 27/27 gym sweep that earned that route describes a model the
+# account can no longer call. Same failure class as fleet_check.py's "ollama pull updates
+# weights in place" — but on a cloud lane, where nothing was watching.
+_REPORTED_MODEL = None
+
+
+def _note_reported_model(resp):
+    """Record the model an OpenAI-compatible / Ollama response claims to be."""
+    global _REPORTED_MODEL
+    try:
+        _REPORTED_MODEL = (resp or {}).get("model") or None
+    except Exception:  # noqa: BLE001 — provenance must never break a call
+        _REPORTED_MODEL = None
+
+
 def _ledger(rec, output=None):
     """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
+
+    The `model` field is the model that ACTUALLY RAN whenever the endpoint reports one —
+    not the string we asked for. Routing weights and verdicts key on this field, so a
+    silent server-side swap must not be able to accrue trust under the old name.
+
     Progress tracking only — must never affect the run, so it swallows everything.
     `output` is the run's answer text; it gets archived for later review."""
+    try:
+        served = _REPORTED_MODEL
+        asked = rec.get("model")
+        if served and asked and served != asked:
+            rec["model"] = served
+            rec["model_requested"] = asked
+            rec["model_swapped"] = True
+            log(f"WARNING: endpoint served '{served}' but '{asked}' was requested — "
+                f"ledger is recording the SERVED model. Trust earned by '{asked}' does "
+                f"not transfer.")
+        elif served and not asked:
+            rec["model"] = served
+    except Exception:  # noqa: BLE001
+        pass
     try:
         import datetime
         rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
@@ -762,10 +820,16 @@ def _ledger(rec, output=None):
         pass
 
 
-def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url):
+def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url,
+                       search=False):
     """Any OpenAI-compatible /chat/completions endpoint: Groq, Cerebras, OpenRouter,
     GitHub Models, xAI — or local servers (ollama's /v1, mlx_lm server, LM Studio).
-    Auth = Bearer OPENAI_API_KEY if set (local servers usually need none)."""
+    Auth = Bearer OPENAI_API_KEY if set (local servers usually need none).
+
+    search=True attaches z.ai's `web_search` tool (z.ai endpoints only). Probed
+    2026-08-10 on the Coding Plan endpoint: HTTP 200, finish_reason=stop, five
+    real ref_N links. The pay-per-token `zai` alias answers 1113 "insufficient
+    balance", so the flat-rate coding lane is the only working z.ai route."""
     BASE_ALIASES = {"groq": "https://api.groq.com/openai/v1",
                     "openrouter": "https://openrouter.ai/api/v1",
                     "openai": "https://api.openai.com/v1",
@@ -802,6 +866,24 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
         body["temperature"] = temperature
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
+    if search:
+        if "z.ai" not in base and "bigmodel.cn" not in base:
+            log("ERROR: --search on the openai backend is z.ai-only "
+                "(--base-url zai-coding). Other endpoints have no web_search tool.")
+            sys.exit(2)
+        body["tools"] = [{"type": "web_search",
+                          "web_search": {"enable": "True",
+                                         "search_engine": "search-prime",
+                                         "search_result": "True",
+                                         "count": "5",
+                                         "content_size": "high"}}]
+        # Grounded answers cite, so they run long — and GLM spends most of the
+        # budget on a hidden reasoning channel BEFORE writing content (probed
+        # 2026-08-10: 872 of 981 completion tokens were reasoning). A caller's
+        # default max_tokens is what produced the 2026-08-04 double-EMPTY, so
+        # floor it here rather than trusting the call site.
+        if body.get("max_tokens", 0) < SEARCH_MIN_TOKENS:
+            body["max_tokens"] = SEARCH_MIN_TOKENS
     # Cloudflare-fronted APIs (e.g. Groq) 403 urllib's default UA — send a real one.
     headers = {"Content-Type": "application/json", "User-Agent": "agent-smith/1.4"}
     key = os.environ.get("OPENAI_API_KEY")
@@ -811,6 +893,8 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
         key = os.environ.get("ZAI_API_KEY") or key
     elif "api.cloudflare.com" in base:
         key = os.environ.get("CF_API_TOKEN") or key
+    elif "openrouter.ai" in base:
+        key = os.environ.get("OPENROUTER_API_KEY") or key
     if key:
         headers["Authorization"] = f"Bearer {key}"
     resp = None
@@ -833,15 +917,33 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url)
         except urllib.error.URLError as e:
             log(f"ERROR: can't reach {base} ({e}).")
             sys.exit(1)
+    _note_reported_model(resp)
     choice = (resp.get("choices") or [{}])[0]
     msg = choice.get("message", {}) or {}
     text = msg.get("content", "") or ""
     u = resp.get("usage") or {}
     log("\n--- openai-compat meta ---")
+    served = resp.get("model")
     log(f"endpoint: {base}  model: {model}"
+        + (f"  SERVED: {served}" if served and served != model else "")
         + ("  auth: bearer" if key else "  auth: none"))
     if u:
         log(f"tokens: prompt={u.get('prompt_tokens')} output={u.get('completion_tokens')}")
+    if search:
+        # z.ai has shipped the refs under several containers; check all of them
+        # rather than trusting one shape.
+        refs = (resp.get("web_search") or msg.get("web_search")
+                or resp.get("references") or [])
+        if refs:
+            log("sources:")
+            for r_ in refs:
+                when = r_.get("publish_date") or ""
+                log(f"  - [{r_.get('refer') or '?'}] {r_.get('title') or '(untitled)'}"
+                    + (f"  ({when})" if when else ""))
+                log(f"      {r_.get('link') or r_.get('url') or '(no link)'}")
+        else:
+            log("sources: (none returned — z.ai may not have searched; treat the "
+                "answer as UNGROUNDED)")
     # Reasoning models (glm-4.5-flash, gpt-oss, …) spend the budget on a hidden
     # reasoning channel FIRST and only then write `content`. Too small a --max-tokens
     # returns HTTP 200 with an EMPTY answer — success-shaped failure, the kind that
@@ -930,7 +1032,9 @@ def _witness(prompt, system, primary_model, primary_text, images, context):
             return  # only short structured outputs compare meaningfully
         wmodel = os.environ.get("SMITH_WITNESS_MODEL", "gpt-oss:20b")
         if wmodel == primary_model:
-            wmodel = "gemma4:26b" if primary_model != "gemma4:26b" else "gpt-oss:20b"
+            # gemma4:26b was the alternate witness until its weights were removed 2026-08-16.
+            wmodel = ("qwen3-coder:30b" if primary_model != "qwen3-coder:30b"
+                      else "gpt-oss:20b")
         wtext = call_ollama(prompt, system, 0.0, wmodel, None)
         agree = _outputs_agree(primary_text, wtext)
         _ledger({"script": "witness", "primary_model": primary_model,
@@ -1151,7 +1255,11 @@ def run_batch(args, prompt):
         log("ERROR: manifest is empty.")
         sys.exit(2)
     any_img = any(p.lower().endswith(IMG_EXTS) for p in items)
-    model = args.model or ("gemma4:26b" if any_img else "qwen3-coder:30b")
+    # Vision auto-pick moved gemma4:26b -> qwen3-vl:4b (2026-08-16). gemma4's weights are
+    # gone, and the vision-v1 suite says the 3.3 GB model was the better pick regardless:
+    # 100% vs 80% recall, and gemma4 INVENTED 4 fields on a tall page in 6s. See
+    # references/measured-results.md "Vision REPLICATED + extended".
+    model = args.model or ("qwen3-vl:4b" if any_img else "qwen3-coder:30b")
     consensus = args.consensus
     temperature = args.temperature
     if consensus:
@@ -1345,8 +1453,11 @@ def main():
 
     # Resolve the cost-driven defaults BEFORE anything else reads args.backend. Only
     # fires when the caller left both --backend and --model unset — an explicit choice
-    # of either always wins. --search has no local/subscription equivalent, so it
-    # always forces cloud regardless of either table. Paid-subscription checked first:
+    # of either always wins. --search has no LOCAL equivalent, so it always forces
+    # cloud regardless of either table. (Since 2026-08-10 z.ai can also ground via
+    # its web_search tool, but that route stays opt-in — `--backend openai
+    # --base-url zai-coding --search` — until it's gym-scored against Gemini
+    # grounding on the research shape.) Paid-subscription checked first:
     # it beat the local baseline in the gym, so it wins the tags it covers.
     if args.backend is None and args.model is None and not args.search \
             and args.tag in DEFAULT_PAID_FOR_TAG:
@@ -1435,14 +1546,17 @@ def main():
                     sys.exit(2)
                 with open(fp, "rb") as fh:
                     images.append(base64.b64encode(fh.read()).decode())
-        if args.search:
-            log("ERROR: --search (web grounding) is only on the gemini (API) backend.")
+        if args.search and args.backend != "openai":
+            log("ERROR: --search (web grounding) is on the gemini (API) backend, or "
+                "the openai backend pointed at z.ai (--base-url zai-coding).")
             sys.exit(2)
         if args.backend == "fm":
             model_eff = "fm"
         elif args.backend == "ollama":
-            # vision needs a vision model: auto-pick gemma4 when images are present
-            model_eff = args.model or ("gemma4:26b" if images else "qwen3-coder:30b")
+            # vision needs a vision model: auto-pick qwen3-vl:4b when images are present
+            # (was gemma4:26b until 2026-08-16 — weights removed; and the vision-v1 suite
+            # scored qwen3-vl:4b 100% vs gemma4's 80% with 4 invented fields anyway)
+            model_eff = args.model or ("qwen3-vl:4b" if images else "qwen3-coder:30b")
         elif args.backend == "openai":
             model_eff = args.model or "unset"
         else:
@@ -1457,7 +1571,8 @@ def main():
                                args.max_tokens, images)
         elif args.backend == "openai":
             text = call_openai_compat(prompt, sys_eff, args.temperature, args.model,
-                                      args.max_tokens, args.base_url)
+                                      args.max_tokens, args.base_url,
+                                      search=args.search)
         else:
             text = call_gemini_cli(prompt, sys_eff, args.temperature, args.model,
                                    preflight=args.preflight)
@@ -1468,6 +1583,7 @@ def main():
                  "files": [os.path.basename(f) for f in args.file] or None,
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "images": len(images) or None, "tailored": tailored or None,
+                 "search": bool(args.search) or None,
                  "seconds": round(time.time() - t0, 1), "status": "ok"},
                 output=text)
         if args.backend == "ollama":
@@ -1517,7 +1633,37 @@ def main():
         body["generationConfig"] = gen
 
     url = f"{BASE}/v1beta/models/{model}:generateContent?key={key}"
-    resp = http_json(url, method="POST", body=body)
+    # Grounded research is the one shape with a measured second lane, so it's the
+    # only one allowed to reroute when the monthly cap blows (see 2026-07-28, which
+    # took the research lane down for four days). SMITH_NO_FALLBACK=1 opts out.
+    may_fall_back = bool(args.search) and not os.environ.get("SMITH_NO_FALLBACK")
+    try:
+        resp = http_json(url, method="POST", body=body, fallback_ok=may_fall_back)
+    except QuotaExhausted as e:
+        if not os.environ.get("ZAI_API_KEY"):
+            log(f"ERROR: Gemini quota exhausted ({e}) and ZAI_API_KEY is unset — "
+                "no fallback lane available.")
+            sys.exit(1)
+        log("\n" + "!" * 72)
+        log(f"GEMINI QUOTA EXHAUSTED -> falling back to z.ai GLM-5.2 + web_search")
+        log(f"  cause: {e}")
+        log("  *** UNVERIFIED LANE: scored 7/10 vs gemini-pro's 10/10 on the")
+        log("  *** research eval (evals/research_grounding_eval.py, 2026-08-10).")
+        log("  *** Its failure mode is reporting STALE pre-training facts WITH")
+        log("  *** real citations attached. RE-VERIFY every version and date.")
+        log("!" * 72)
+        text = call_openai_compat(prompt, sys_eff, args.temperature, "glm-5.2",
+                                  args.max_tokens,
+                                  "https://api.z.ai/api/coding/paas/v4", search=True)
+        print(text)
+        sys.stdout.flush()
+        _ledger({"script": "gemini", "backend": "openai", "model": "glm-5.2",
+                 "purpose": _subject(prompt, args.purpose), "tag": args.tag,
+                 "prompt_chars": len(prompt), "out_chars": len(text),
+                 "search": True, "fallback_from": "gemini-quota-exhausted",
+                 "seconds": round(time.time() - t0, 1), "status": "ok"},
+                output=text)
+        return
 
     fb = resp.get("promptFeedback", {})
     if fb.get("blockReason"):
