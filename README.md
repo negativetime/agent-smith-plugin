@@ -136,7 +136,7 @@ evals/              research grounding eval and its fixtures
 data/               fleet_ids.json is tracked. usage.jsonl, verdicts.db, outputs/ are not
 docs/               drafts
 SECURITY.md         how to report a vulnerability
-LICENSE             mit
+LICENSE             apache 2.0
 ```
 
 ## environment
@@ -165,4 +165,4 @@ keys live in the environment. nothing in this repo reads them from a file.
 
 ## license
 
-mit. see [LICENSE](LICENSE).
+apache 2.0. see [LICENSE](LICENSE).
