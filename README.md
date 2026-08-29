@@ -136,6 +136,7 @@ evals/              research grounding eval and its fixtures
 data/               fleet_ids.json is tracked. usage.jsonl, verdicts.db, outputs/ are not
 docs/               drafts
 SECURITY.md         how to report a vulnerability
+LICENSE             mit
 ```
 
 ## environment
@@ -161,3 +162,7 @@ keys live in the environment. nothing in this repo reads them from a file.
 - documenting a gap does not close it. web research sat at 2 percent delegated for weeks with the route sitting trusted and idle. the hooks exist because the decision moment is when claude reaches for the tool, not when it reads a doc.
 - `ollama pull` replaces weights in place under the same tag. a trusted model can become a different model overnight.
 - a tiny local vision model beat two remote ones outright on ocr of a real screenshot. bigger was not better; measuring was.
+
+## license
+
+mit. see [LICENSE](LICENSE).
