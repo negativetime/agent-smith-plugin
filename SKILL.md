@@ -127,8 +127,8 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 
 | backend | runs on | cost | files/web | use when |
 |---|---|---|---|---|
-| `gemini` | Google cloud (API key) | free tier, rate-limited | **yes** | anything substantial; ONLY one with `--file`/`--search` |
-| `gemini-cli` | your OAuth login | **PAID — user's $20/mo Google AI Pro** | no | THE lane when the free API is slow/429ing (measured 2026-07-12: 3.8s vs 50s+ congested API). Text-only: pipe file contents via stdin. Use what's paid for |
+| `gemini` | Google cloud (`GEMINI_API_KEY`) | free tier, rate-limited | **yes** | ⚠ **specialist since 2026-09-05, no longer the bulk default** — reach for it for `--file`/`--search`, the only things ONLY it can do. Its quota is the **API's**, separate from the consumer Gemini Pro plan; Pro buys this backend nothing |
+| `gemini-cli` | your OAuth login | **PAID — Josh's Google AI Pro, already bought** | no | THE lane when the free API is slow/429ing (measured 2026-07-12: 3.8s vs 50s+ congested API). This is the ONLY backend that spends the Pro plan — `--backend gemini` does not. Text-only: pipe file contents via stdin. Use what's paid for |
 | `fm` | this Mac (~3B) | free | no | private + simple bulk (`FM_HELPER` path) |
 | `ollama` | this Mac | free, unlimited | images yes | private/offline/high-volume; the FLEET below |
 | `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data — private work stays local** |
@@ -197,7 +197,7 @@ grounding) regardless of tag.
 
 **`code-draft` AND `long-digest` moved to a NEW `DEFAULT_PAID_FOR_TAG` table as of
 2026-07-28** — bare `--tag code-draft` or `--tag long-digest` now route to the z.ai
-**GLM Coding Plan** (`glm-5.2`, `https://api.z.ai/api/coding/paas/v4`, needs
+**GLM Coding Plan** (`glm-5.3`, `https://api.z.ai/api/coding/paas/v4`, needs
 `ZAI_API_KEY`), logging `[paid] --tag X defaults to the z.ai GLM Coding Plan`. Flat $18/mo
 subscription — the marginal cost of one more call is $0, so this table is checked BEFORE
 the free-local table and wins where both would apply. `code-draft`'s justification:
@@ -219,19 +219,28 @@ left the machine. For anything genuinely sensitive (credentials, PII, private co
 route explicitly to local — `--backend ollama --model gpt-oss:20b` — by hand, every time;
 the paid default does not know to make that call for you.
 
-Both paid-default tags auto-raise `--max-tokens` to a measured floor (currently 8000 for
-`long-digest`) if the caller left it unset or too low — a budget calibrated for one shape
-can leave another shape returning EMPTY content, since GLM spends part of its budget on a
-hidden reasoning channel before writing anything visible. Passing `--max-tokens` explicitly
+Every paid-default tag auto-raises `--max-tokens` to a measured floor (**32000 since
+2026-09-05**, was 8000) if the caller left it unset or too low — a budget calibrated for one
+shape can leave another shape returning EMPTY content, since GLM spends part of its budget on
+a hidden reasoning channel before writing anything visible. Passing `--max-tokens` explicitly
 still wins if it's already at or above the floor.
+
+**Why 32000, measured against this exact endpoint 2026-09-05:** glm-5.3 returned
+`finish_reason=length` with `content=""` on **six of six** attempts at `max_tokens` 8000,
+spending 7994–8000 of its 8000 tokens on the hidden reasoning channel, then wrote a full
+19–25 KB module on **three of three** at 32000 (13.6k–23.2k reasoning tokens first). 8000
+was never a floor, it was a coin flip that had been landing. Raising a **ceiling costs
+nothing** — you are billed for what is generated, not for what you allowed — so treat this
+as insurance, not spend. The table's model string also moved `glm-5.2` → `glm-5.3`: z.ai
+retired 5.2 in place on 2026-08-14, so the old string had been silently running 5.3 while
+logging the wrong name into the ledger.
 
 `--backend ollama --model qwen3-coder:30b` (or `gemma4:26b`) still works as an explicit
 override for `code-draft` — local stays free/private, just no longer the silent default.
 
-Tags below this line with neither a `DEFAULT_PAID_FOR_TAG` nor `DEFAULT_LOCAL_FOR_TAG` entry
-(`translate`, `copy-draft`, `design`, `research`, …) still default to the pay-per-token
-Gemini cloud API — their evidence isn't strong enough yet to force a different route
-silently.
+Any remaining tag with neither a `DEFAULT_PAID_FOR_TAG` nor `DEFAULT_LOCAL_FOR_TAG` entry
+still defaults to the Gemini API — their evidence isn't strong enough yet to force a
+different route silently.
 
 Reach for these WITHOUT re-deriving the gap report; each is a measured gap joined with a
 ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
@@ -258,7 +267,7 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   local first-pass describes, Claude views only flagged shots. Digit-string crop rule applies.
 - **Mechanical code boilerplate from a clear spec** (Codable conformance, enum plumbing,
   UI-label tables, test scaffolds) → bare `--tag code-draft` now defaults to the z.ai GLM
-  Coding Plan (`glm-5.2`, see the DEFAULT-TO-PAID section above) — gym-swept 27/27
+  Coding Plan (`glm-5.3`, see the DEFAULT-TO-PAID section above) — gym-swept 27/27
   2026-07-28, no residency swap. `--backend ollama --model qwen3-coder:30b` (or
   `gemma4:26b`) still available as an explicit local/private override.
 - **Classification / tag / label batches** → `llama3.2:3b` (`--tag classify`; 1g/0b),
@@ -285,6 +294,37 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   until it passes an agent-gym task. Use gemini-pro (5-streak, LIGHT REVIEW — first earned
   tier), or gemma4:26b / qwen3-coder:30b (2g/0b each).
 
+## Gemini is no longer the default for bulk — 2026-09-05
+
+**`translate` and `copy-draft` joined `DEFAULT_PAID_FOR_TAG`**, so bulk drafting now routes
+to z.ai by default rather than to Gemini. Two facts drive it, and the first is the one that
+is easy to get wrong:
+
+⚠ **The consumer Gemini Pro subscription does NOT raise this script's quota.** They are
+different products. `gemini.google.com` (where Josh is on **Pro**) is the consumer app;
+`--backend gemini` calls `generativelanguage.googleapis.com` with `GEMINI_API_KEY`, which is
+the **API**, on its own separate quota. Burning the consumer allowance has no effect here,
+and Pro buys this script nothing. Josh declined the extra ~$25/mo paid API tier, so the API
+stays on its **free, rate-limited** tier — which is exactly what makes it the wrong default
+for volume.
+
+The second: z.ai is already paid for, its marginal cost is $0, and on the only head-to-head
+measured it is also the better option (TRANSLATE 83% vs Ollama Cloud's 60%; it emitted a full
+module at 32000 where ollama.com's `/v1` returned nothing).
+
+**Gemini keeps what only it can do:** `--file` and `--search`. Nothing else routes there by
+default. Deliberately NOT moved: `design` stays on **flash** (flash TIED pro 11.5 on the only
+task both finished — no measured basis to move it) and `research` stays on Gemini because
+`--search` forces cloud and no other backend has web grounding.
+
+⚠ **z.ai limits CONCURRENCY, not volume:** ~6 requests in flight, then HTTP 429
+`code 1302, Rate limit reached for requests` fires instantly. Keep fan-outs serial-ish.
+
+**`--backend gemini-cli` is a separate, already-paid lane** — it runs on Josh's OAuth login
+against the Pro subscription above, so it spends something already bought rather than the
+free API tier. Reach for it when the free API is slow or 429ing. Text-only: pipe file
+contents via stdin.
+
 ## Standing offload targets — token audit 2026-07-12
 
 Measured: 136M Claude output tokens/30d, only 0.2% offloaded. Biggest single consumer
@@ -307,7 +347,7 @@ is a documented DEFAULT PRACTICE, not something the tool enforces — reach for 
 # and CODE-EDIT 2/2 at L3 (real tool loop), beat local gpt-oss:20b's wall-clock on 4/5
 # agentic tasks, flat-rate subscription (marginal cost $0). Needs ZAI_API_KEY.
 python3 "$SKILL/scripts/smith_agent.py" --backend openai \
-  --base-url https://api.z.ai/api/coding/paas/v4 --model glm-5.2 \
+  --base-url https://api.z.ai/api/coding/paas/v4 --model glm-5.3 \
   --api-key-env ZAI_API_KEY --workdir /path/to/SCRATCH --prompt-file task.txt
 
 # local/private fallback (free, no data leaves the machine):

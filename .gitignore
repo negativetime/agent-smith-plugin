@@ -5,3 +5,4 @@ data/usage.jsonl
 data/usage.jsonl.bak-*
 data/verdicts.db
 data/outputs/
+data/ollama_usage.jsonl

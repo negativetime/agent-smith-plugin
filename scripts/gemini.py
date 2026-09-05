@@ -98,13 +98,39 @@ DEFAULT_LOCAL_FOR_TAG = {
 # 11x time cost — verification is the constant, so optimize the other variable. GLM's
 # context window (1M, docs-verified) comfortably exceeds gpt-oss:20b's 131k, so this
 # isn't a capacity tradeoff either. Ledger's own reasoning-budget finding applies:
-# min_max_tokens=8000 (a 2000 floor calibrated for code-draft left this tag returning
+# min_max_tokens (a 2000 floor calibrated for code-draft once left long-digest returning
 # EMPTY content — reasoning ate the entire budget on a document-grounded task).
+#
+# 2026-09-05 — floors raised 8000 -> 32000 and the model string corrected to glm-5.3.
+# Measured directly against THIS endpoint on a design-shaped prompt: glm-5.3 returned
+# finish_reason=length with content="" on SIX of six attempts at max_tokens=8000, spending
+# 7994-8000 of its 8000 tokens on the hidden reasoning channel, then wrote a full 19-25KB
+# module on THREE of three at 32000 (13.6k-23.2k reasoning tokens first). 8000 was never a
+# floor, it was a coin flip that had been landing. Raising a CEILING is free — you are
+# billed for what is generated, not for what you allowed — so this is insurance, not spend.
+# The model string is corrected because z.ai retired 5.2 in place on 2026-08-14 (see
+# _REPORTED_MODEL below): asking for glm-5.2 has been silently running glm-5.3 and logging
+# the wrong name into the ledger ever since.
+#
+# GEMINI IS NO LONGER THE DEFAULT FOR BULK (2026-09-05, user's call). Two facts drive it:
+# the consumer Gemini Pro subscription does NOT raise the GEMINI_API_KEY quota — they are
+# different products, gemini.google.com vs generativelanguage.googleapis.com — and the user
+# declined the paid API tier, so the free tier's rate limits make Gemini the wrong default
+# for volume. z.ai is already paid for (marginal cost $0) and on the only head-to-head
+# measured it is also the better one. Gemini keeps what ONLY it can do: --search and --file.
+# Deliberately NOT moved: `design` stays on flash (flash TIED pro 11.5 on the only task both
+# finished, so there is no measured basis to move it) and `research` stays on Gemini because
+# --search forces cloud and no other backend has web grounding.
+#
+# ⚠ z.ai rate-limits CONCURRENCY, not volume: ~6 requests in flight, then HTTP 429
+# `code 1302, Rate limit reached for requests` instantly. Fan-outs must stay serial-ish.
 # PRIVACY IS NOT COVERED BY THIS ENTRY — see the note above DEFAULT_LOCAL_FOR_TAG.
+_ZAI_CODING = "https://api.z.ai/api/coding/paas/v4"
 DEFAULT_PAID_FOR_TAG = {
-    "code-draft": {"model": "glm-5.2", "base_url": "https://api.z.ai/api/coding/paas/v4"},
-    "long-digest": {"model": "glm-5.2", "base_url": "https://api.z.ai/api/coding/paas/v4",
-                    "min_max_tokens": 8000},
+    "code-draft":  {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
+    "long-digest": {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
+    "translate":   {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
+    "copy-draft":  {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
 }
 
 # --- Per-model prompt tailoring --------------------------------------------------
@@ -1451,13 +1477,36 @@ def main():
             "the hebbian router. Reuse an existing tag or coin a new one.")
         sys.exit(2)
 
+    # 2026-08-31 cost directive (Josh, explicit, twice): "use z.ai over Gemini —
+    # I already paid for a year of z.ai." research now DEFAULTS to the z.ai grounded
+    # lane DESPITE the measured accuracy gap (glm-5.3 scored 6/10 on the 08-31 re-run
+    # of evals/research_grounding_eval.py vs gemini-pro's 10/10; failure mode: stale
+    # pre-training facts wearing real citations — Swift 6.2, Zig 0.14.0, Go 1.26.1,
+    # each with 5 live refs). The user chose cost knowingly; the compensating control
+    # is the standing rule that Claude RE-VERIFIES every delegated version/date claim,
+    # reinforced by the banner below on every routed run. gemini-pro (the measured
+    # 10/10 lane) stays one flag away — `--model pro` — and remains the right call
+    # when a research answer is correctness-critical and hard to re-verify.
+    # Grounding is forced on: ungrounded GLM research is strictly worse (pure
+    # pre-training), and web_search is $0 marginal on the flat-rate Coding Plan.
+    if args.tag == "research" and args.backend is None and args.model is None:
+        args.backend = "openai"
+        args.base_url = "zai-coding"
+        args.model = "glm-5.3"
+        if not args.search:
+            args.search = True
+            log("[route] --tag research implies --search on the z.ai lane")
+        log("[route] --tag research defaults to z.ai GLM + web_search "
+            "(cost directive 2026-08-31: flat-rate plan, $0 marginal; "
+            "pass --model pro for the Gemini lane)")
+        log("  *** z.ai research measured 6/10 vs gemini-pro 10/10 (2026-08-31 eval).")
+        log("  *** Failure mode: STALE pre-training facts cited to real sources.")
+        log("  *** RE-VERIFY every version number and date against a primary source.")
+
     # Resolve the cost-driven defaults BEFORE anything else reads args.backend. Only
     # fires when the caller left both --backend and --model unset — an explicit choice
     # of either always wins. --search has no LOCAL equivalent, so it always forces
-    # cloud regardless of either table. (Since 2026-08-10 z.ai can also ground via
-    # its web_search tool, but that route stays opt-in — `--backend openai
-    # --base-url zai-coding --search` — until it's gym-scored against Gemini
-    # grounding on the research shape.) Paid-subscription checked first:
+    # cloud regardless of either table. Paid-subscription checked first:
     # it beat the local baseline in the gym, so it wins the tags it covers.
     if args.backend is None and args.model is None and not args.search \
             and args.tag in DEFAULT_PAID_FOR_TAG:
@@ -1645,19 +1694,19 @@ def main():
                 "no fallback lane available.")
             sys.exit(1)
         log("\n" + "!" * 72)
-        log(f"GEMINI QUOTA EXHAUSTED -> falling back to z.ai GLM-5.2 + web_search")
+        log(f"GEMINI QUOTA EXHAUSTED -> falling back to z.ai GLM-5.3 + web_search")
         log(f"  cause: {e}")
-        log("  *** UNVERIFIED LANE: scored 7/10 vs gemini-pro's 10/10 on the")
-        log("  *** research eval (evals/research_grounding_eval.py, 2026-08-10).")
+        log("  *** LOWER-ACCURACY LANE: scored 6/10 vs gemini-pro's 10/10 on the")
+        log("  *** research eval (evals/research_grounding_eval_glm53_2026-08-31.json).")
         log("  *** Its failure mode is reporting STALE pre-training facts WITH")
         log("  *** real citations attached. RE-VERIFY every version and date.")
         log("!" * 72)
-        text = call_openai_compat(prompt, sys_eff, args.temperature, "glm-5.2",
+        text = call_openai_compat(prompt, sys_eff, args.temperature, "glm-5.3",
                                   args.max_tokens,
                                   "https://api.z.ai/api/coding/paas/v4", search=True)
         print(text)
         sys.stdout.flush()
-        _ledger({"script": "gemini", "backend": "openai", "model": "glm-5.2",
+        _ledger({"script": "gemini", "backend": "openai", "model": "glm-5.3",
                  "purpose": _subject(prompt, args.purpose), "tag": args.tag,
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "search": True, "fallback_from": "gemini-quota-exhausted",
