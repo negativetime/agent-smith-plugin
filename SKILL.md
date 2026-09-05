@@ -1,7 +1,8 @@
 ---
 name: agent-smith
 description: >-
-  Offload bulky or research-heavy text work to Google Gemini (via GEMINI_API_KEY), then
+  Offload bulky or research-heavy text work to the already-paid fleet — z.ai GLM for bulk
+  drafting, Google Gemini (via GEMINI_API_KEY) for --file and --search — then
   verify and finish with Claude to spare Claude's tokens and context. Trigger PROACTIVELY,
   even if Gemini isn't named, whenever the heavy part of a task is generating or digesting
   text: web research on current facts or "what's new/changed in X" with source links;
