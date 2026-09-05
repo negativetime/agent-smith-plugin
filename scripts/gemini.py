@@ -133,6 +133,75 @@ DEFAULT_PAID_FOR_TAG = {
     "copy-draft":  {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
 }
 
+# --- SoundCheck egress guard (2026-09-05) ---------------------------------------
+#
+# Josh's call: nothing here is sensitive EXCEPT SoundCheck material, which is not his
+# to leak — it is Listen, Inc.'s IP (SC + hardware manuals, unreleased DEV25 build docs,
+# Perforce material, AES papers) plus a protocol capture. A prompt rule is not enough for
+# this class; the salem-bus-data lesson was that prompts alone failed and code guards
+# fixed it, so this is enforced here rather than described in SKILL.md.
+#
+# Blocks rather than silently rerouting: a local model may be the wrong tool for the task
+# too, and Josh should choose, not discover it after the fact. Path-based by necessity —
+# prose pasted into the prompt cannot be detected, so SKILL.md still carries that rule.
+SOUNDCHECK_MARKER = "soundcheck"
+
+
+def _cloud_route(backend, model):
+    """True when the resolved route leaves this machine."""
+    if backend in ("gemini", "gemini-cli", "openai"):
+        return True
+    # ⚠ `--backend ollama` is local ONLY without a :cloud tag; a signed-in daemon proxies
+    # `<name>:cloud` to Ollama's servers through localhost:11434, which looks identical here.
+    return backend == "ollama" and str(model or "").endswith(":cloud")
+
+
+def _soundcheck_paths(args):
+    """Every path this run would read, filtered to SoundCheck material."""
+    candidates = list(args.file or [])
+    if getattr(args, "batch", None):
+        candidates.append(args.batch)
+        try:
+            with open(args.batch) as f:
+                candidates += [ln.strip() for ln in f if ln.strip()]
+        except OSError:
+            pass          # unreadable manifest is reported later, not here
+    candidates.append(os.getcwd())
+    hits = []
+    for c in candidates:
+        try:
+            real = os.path.realpath(os.path.expanduser(c))
+        except (OSError, ValueError):
+            continue
+        if SOUNDCHECK_MARKER in real.lower():
+            hits.append(real)
+    return hits
+
+
+def enforce_soundcheck_guard(args):
+    if not _cloud_route(args.backend, args.model):
+        return
+    hits = _soundcheck_paths(args)
+    if not hits:
+        return
+    where = "\n  ".join(sorted(set(hits))[:5])
+    log("ERROR: refusing to send SoundCheck material to a cloud backend "
+        f"(--backend {args.backend}"
+        + (f" --model {args.model}" if args.model else "") + ").")
+    log(f"  triggered by:\n  {where}")
+    log("  SoundCheck material is Listen, Inc.'s IP, not ours to put on someone else's "
+        "servers.")
+    # ⚠ --file does NOT work for documents on a local backend (images only), so telling
+    # the caller to "just use --backend ollama --file" would hand them a route that fails.
+    # stdin is the one that actually works: it is appended to the prompt as input data.
+    log("  Route it locally instead — pipe the content rather than using --file, which is "
+        "images-only on local backends:")
+    log("    cat <path> | gemini.py --backend ollama --model gpt-oss:20b 'your instruction'")
+    log("  Use a BARE model tag; a :cloud suffix is NOT local. For questions about the SC "
+        "corpus itself, the soundcheck-helper MCP answers on-device.")
+    sys.exit(2)
+
+
 # --- Per-model prompt tailoring --------------------------------------------------
 #
 # --system carries TASK framing (role/style/constraints); this carries MODEL
@@ -1541,6 +1610,7 @@ def main():
                 f"— pass --max-tokens to override")
             args.max_tokens = floor
     args.backend = args.backend or "gemini"
+    enforce_soundcheck_guard(args)
 
     if args.consensus and (not args.batch or args.backend != "ollama"):
         log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "

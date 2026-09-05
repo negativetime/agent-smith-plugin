@@ -132,7 +132,7 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 | `gemini-cli` | your OAuth login | **PAID — Josh's Google AI Pro, already bought** | no | THE lane when the free API is slow/429ing (measured 2026-07-12: 3.8s vs 50s+ congested API). This is the ONLY backend that spends the Pro plan — `--backend gemini` does not. Text-only: pipe file contents via stdin. Use what's paid for |
 | `fm` | this Mac (~3B) | free | no | private + simple bulk (`FM_HELPER` path) |
 | `ollama` | this Mac **unless the tag ends `:cloud`** | free, unlimited — **except `:cloud`** | images yes | private/offline/high-volume; the FLEET below. ⚠ **`--model <name>:cloud` is NOT local**: a signed-in daemon proxies it through `localhost:11434` to Ollama's servers, so it leaves the machine and spends the metered allowance. It looks identical to a local call at the call site — see Ollama Cloud below |
-| `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data — private work stays local** |
+| `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data** — which matters for SoundCheck material (Listen, Inc.'s IP, code-guarded) and credentials; Josh's own work is fine here |
 
 ## Local fleet routing (gym-earned; evidence → [references/measured-results.md](references/measured-results.md))
 
@@ -214,13 +214,27 @@ The user's call: Claude verifies every delegated output regardless of which mode
 it — that's not new for this tag, it's the standing rule — so a small accuracy gap
 shouldn't outweigh an 11x time cost; verification is the constant, optimize the other
 variable. GLM's context window (1M, docs-verified) comfortably exceeds gpt-oss:20b's 131k,
-so this isn't a capacity tradeoff either. **What this does NOT resolve: privacy.**
-Verification catches wrong facts in a cloud draft; it does not catch data having already
-left the machine. For anything genuinely sensitive (credentials, PII, private content),
-route explicitly to local — `--backend ollama --model gpt-oss:20b` — by hand, every time
-(⚠ a bare model name only; a `:cloud` suffix on that SAME flag leaves the machine —
-see Ollama Cloud below);
-the paid default does not know to make that call for you.
+so this isn't a capacity tradeoff either.
+
+**Privacy scope, narrowed by Josh 2026-09-05: only SoundCheck material is off-limits.**
+His own apps, repos, notes, drafts and marketing copy are fine on a cloud backend — do not
+hedge about them or ask. The exception is real and is not about Josh's preference: SoundCheck
+material is **Listen, Inc.'s IP** (SC + hardware manuals, unreleased DEV25 build docs,
+Perforce material, AES papers, a protocol capture), so it is not ours to put on someone
+else's servers. Credentials and third-party PII stay local for the obvious reasons.
+
+**The SoundCheck rule is enforced in code, not by this paragraph** (`enforce_soundcheck_guard`
+in `gemini.py`, added 2026-09-05 — the salem-bus-data lesson was that prompt rules alone
+failed and code guards fixed it). Any `--file`/`--batch` path, or a cwd, resolving under a
+path containing `soundcheck` **hard-exits (2)** on a cloud route, where "cloud" includes
+⚠ `--backend ollama --model <name>:cloud`, which looks local at the call site but is not.
+It blocks rather than silently rerouting, because a local model may be the wrong tool for
+that task too and Josh should pick.
+
+⚠ **The guard is path-based and cannot see prose you paste into the prompt.** That part is
+still on you. And note `--file` does NOT work for documents on a local backend (images
+only), so the local route for a SoundCheck doc is a pipe:
+`cat <path> | gemini.py --backend ollama --model gpt-oss:20b '<instruction>'`.
 
 Every paid-default tag auto-raises `--max-tokens` to a measured floor (**32000 since
 2026-09-05**, was 8000) if the caller left it unset or too low — a budget calibrated for one
