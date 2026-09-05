@@ -131,7 +131,7 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 | `gemini` | Google cloud (`GEMINI_API_KEY`) | free tier, rate-limited | **yes** | ⚠ **specialist since 2026-09-05, no longer the bulk default** — reach for it for `--file`/`--search`, the only things ONLY it can do. Its quota is the **API's**, separate from the consumer Gemini Pro plan; Pro buys this backend nothing |
 | `gemini-cli` | your OAuth login | **PAID — Josh's Google AI Pro, already bought** | no | THE lane when the free API is slow/429ing (measured 2026-07-12: 3.8s vs 50s+ congested API). This is the ONLY backend that spends the Pro plan — `--backend gemini` does not. Text-only: pipe file contents via stdin. Use what's paid for |
 | `fm` | this Mac (~3B) | free | no | private + simple bulk (`FM_HELPER` path) |
-| `ollama` | this Mac | free, unlimited | images yes | private/offline/high-volume; the FLEET below |
+| `ollama` | this Mac **unless the tag ends `:cloud`** | free, unlimited — **except `:cloud`** | images yes | private/offline/high-volume; the FLEET below. ⚠ **`--model <name>:cloud` is NOT local**: a signed-in daemon proxies it through `localhost:11434` to Ollama's servers, so it leaves the machine and spends the metered allowance. It looks identical to a local call at the call site — see Ollama Cloud below |
 | `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data — private work stays local** |
 
 ## Local fleet routing (gym-earned; evidence → [references/measured-results.md](references/measured-results.md))
@@ -217,7 +217,9 @@ variable. GLM's context window (1M, docs-verified) comfortably exceeds gpt-oss:2
 so this isn't a capacity tradeoff either. **What this does NOT resolve: privacy.**
 Verification catches wrong facts in a cloud draft; it does not catch data having already
 left the machine. For anything genuinely sensitive (credentials, PII, private content),
-route explicitly to local — `--backend ollama --model gpt-oss:20b` — by hand, every time;
+route explicitly to local — `--backend ollama --model gpt-oss:20b` — by hand, every time
+(⚠ a bare model name only; a `:cloud` suffix on that SAME flag leaves the machine —
+see Ollama Cloud below);
 the paid default does not know to make that call for you.
 
 Every paid-default tag auto-raises `--max-tokens` to a measured floor (**32000 since
@@ -325,6 +327,38 @@ task both finished — no measured basis to move it) and `research` stays on Gem
 against the Pro subscription above, so it spends something already bought rather than the
 free API tier. Reach for it when the free API is slow or 429ing. Text-only: pipe file
 contents via stdin.
+
+## Ollama Cloud — metered lane, gym/eval only — 2026-09-05
+
+$20/mo plan carrying **$60 of included usage**. Reached by suffixing a model tag with
+`:cloud` (`--backend ollama --model glm-5.3:cloud`), which the signed-in local daemon
+proxies to Ollama's servers. No API key needed on that path; `OLLAMA_API_KEY` is only for
+the hosted `https://ollama.com/v1` endpoint.
+
+⚠ **`:cloud` is not local and not private.** It is the same `--backend ollama` flag, the
+same `localhost:11434` endpoint and the same command shape as a free on-device call, but
+the data leaves the machine and the request is billed against the allowance. Anything
+genuinely sensitive must use a tag WITHOUT the suffix.
+
+⚠ **NOT a production lane.** The 2026-09-05 gate granted none. All five cloud models
+saturated the suite (CODE-GEN 5/5, DOCS 2/2, STRUCT 2/2, agentic 6/6), so the only
+discriminating capability was TRANSLATE — where z.ai's glm-5.3 scored 83% against Ollama
+Cloud's 60% on the same weights. **Prefer z.ai for real work.** Spend this allowance on
+work where a wrong answer is cheap and caught: gym gates, `--repeat` confirm runs, building
+harder tasks, and bulk first drafts Claude verifies anyway.
+
+**Budget is a FRACTION, not dollars.** `GET https://ollama.com/api/usage` returns
+`limits.monthly.usage` as a fraction of the allowance and `activity.cost` as out-of-pocket
+overage *beyond* it — so `cost: 0.00000` does NOT mean the work was free. There is no
+billing endpoint (`subscription`/`billing`/`account`/`plan`/`limits` all 404), so the cycle
+reset cannot be read from the API.
+
+    python3 "$SKILL/scripts/ollama_budget.py" --resets 2026-10-05
+
+Logs each poll to `data/ollama_usage.jsonl`, infers the reset by watching the fraction drop,
+and reports burn rate plus the per-day spend needed to finish a cycle. Baseline 09-05: 4.1%
+= $2.46 of $60 after one 6-model gate, needing ~$1.97/day to exhaust by 10-05 — roughly one
+gate-equivalent per day.
 
 ## Standing offload targets — token audit 2026-07-12
 
