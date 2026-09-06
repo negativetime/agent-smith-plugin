@@ -408,7 +408,7 @@ python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
 
 Rules: SCRATCH dirs only (it executes model shell — never a live repo); write the task like
 a ticket (spec, exact outputs, how to verify); seed a `test_public.py`; **verify the result
-yourself**, then verdict it. Canonical source + harness: `~/Python/agent-gym/`.
+yourself**, then verdict it. Canonical source + harness: `~/Developer/agent-gym/`.
 
 ## Local transcription — transcribe.py (audio → text, free, private)
 

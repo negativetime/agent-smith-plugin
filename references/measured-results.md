@@ -1,7 +1,7 @@
 # Measured results — the evidence behind the routing
 
 Read this only when you need the WHY behind a routing rule, a tier, or a caveat.
-Canonical harness + full verdicts: `~/Python/agent-gym/` (`BASELINE-2026-07-01.md`).
+Canonical harness + full verdicts: `~/Developer/agent-gym/` (`BASELINE-2026-07-01.md`).
 
 ## Fleet tiers (agent-gym, hidden-test graded, trusted = 2 consecutive ≥90% runs)
 
@@ -72,7 +72,7 @@ Agents-A1 vision confirmed working via ollama (n=1, accurate); full eval not yet
 
 ## Vision REPLICATED + extended (vision-v1 doc suite, 2026-08-16)
 
-First repeatable vision harness: `~/Python/agent-gym/vision/` (corpus builder, runner with
+First repeatable vision harness: `~/Developer/agent-gym/vision/` (corpus builder, runner with
 `--repeat`, self-tested grader, every reply stored for offline re-grading). Construction
 truth — invented authors/DOI/figures, so nothing scores from world knowledge. 4 items:
 clean page, 1275×5625 tall capture, degraded scan, dense numeric table. 24 runs.
