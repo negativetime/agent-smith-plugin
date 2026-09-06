@@ -19,6 +19,7 @@ Examples:
 import argparse
 import ast
 import base64
+import hashlib
 import json
 import mimetypes
 import os
@@ -176,6 +177,122 @@ def _soundcheck_paths(args):
         if SOUNDCHECK_MARKER in real.lower():
             hits.append(real)
     return hits
+
+
+# Cost SHAPE of a batch route, which is what actually matters — the backend NAME is a
+# bad proxy for it and used to be the only check. Widened 2026-09-06 after Josh pointed
+# out that fan-out can and should include z.ai:
+#   ollama + bare tag      free, on this Mac
+#   ollama + <name>:cloud  METERED per token against the $60 Ollama Cloud allowance,
+#                          and byte-identical to a free call at the call site
+#   openai + zai-coding    the flat-rate GLM Coding Plan — already bought, $0 marginal,
+#                          and measurably better than local, so the BEST fan-out lane
+#   openai + zai           the PAY-PER-TOKEN alias, which this account has no balance on
+#   openai + anything else unknown; assume metered
+FREE_BATCH_ROUTES = {("ollama", False), ("openai", "zai-coding")}
+
+
+def _batch_cost_shape(backend, model, base_url):
+    """Return (is_free, label) for a --batch route."""
+    # A :cloud suffix is an Ollama-only concept. On the ollama backend it is metered; on
+    # any other backend it is not a real model name, and a caller who typed it almost
+    # certainly believes they are on Ollama Cloud. Stop for both, since the second case
+    # is exactly the "looks local at the call site" confusion this guard exists for.
+    if str(model or "").endswith(":cloud"):
+        if backend == "ollama":
+            return False, f"{model} (Ollama Cloud, metered per token)"
+        return False, (f"{model} — a :cloud tag means nothing on --backend {backend}; "
+                       "drop the suffix or switch to --backend ollama")
+    if backend == "ollama":
+        return True, f"{model} (local, free)"
+    if backend == "openai":
+        if (base_url or "") == "zai-coding":
+            return True, "z.ai GLM Coding Plan (flat-rate, already paid)"
+        if (base_url or "") == "zai":
+            return False, ("the pay-per-token z.ai alias — this account has no balance "
+                           "there; you almost certainly want --base-url zai-coding")
+        return False, f"{base_url or 'an OpenAI-compatible host'} (assume metered)"
+    return False, backend
+
+
+def _unique_batch_names(items):
+    """Map each manifest path to a UNIQUE output basename.
+
+    ⚠ Measured 2026-09-06: `--batch` named outputs with os.path.basename(path) alone, so
+    a sweep over tasks/*/grade/check.py wrote all four results to check.py.out.txt — and
+    still reported {"batch": 4, "ok": 4, "failed": []}. Four items in, one file out,
+    complete success reported. That is the worst shape a bug can take: exits 0, looks
+    right, and silently discards 75% of the work you already paid to generate.
+
+    It bites exactly the fan-out use case this flag exists for, because a codebase sweep
+    is full of repeated basenames — check.py, __init__.py, index.ts, main.go, README.md.
+
+    Keeps the plain basename when it is unique (the common case, and readable), and
+    otherwise grows the name leftwards along the path until it separates: "check.py"
+    becomes "api_contract__grade__check.py". Falls back to a path hash if two manifest
+    entries resolve to the same file, which no amount of path suffix can separate.
+    """
+    def tail(path, n):
+        return "__".join(os.path.normpath(path).split(os.sep)[-n:])
+
+    names, used = {}, set()
+    for p_ in items:
+        parts = os.path.normpath(p_).split(os.sep)
+        name = None
+        for n in range(1, len(parts) + 1):
+            cand = tail(p_, n)
+            if not any(q != p_ and tail(q, n) == cand for q in items):
+                name = cand
+                break
+        if name is None or name in used:
+            h = hashlib.sha1(os.path.abspath(p_).encode()).hexdigest()[:8]
+            stem, ext = os.path.splitext(os.path.basename(p_))
+            name = f"{stem}.{h}{ext}"
+        used.add(name)
+        names[p_] = name
+    return names
+
+
+def _batch_generate(args, prompt, system, temperature, model, images):
+    """One batch item on whichever backend --batch was pointed at.
+
+    Kept as a single helper so the primary and the --consensus model always take the
+    same code path; when they drifted apart the consensus vote silently compared two
+    different call shapes.
+    """
+    if args.backend == "openai":
+        return call_openai_compat(prompt, system, temperature, model,
+                                  args.max_tokens, args.base_url)
+    return call_ollama(prompt, system, temperature, model, args.max_tokens, images)
+
+
+def enforce_batch_cost_guard(items, backend, model, consensus, base_url, allow_metered):
+    """Refuse a --batch fan-out over a metered route unless asked explicitly.
+
+    Added 2026-09-06. `--batch` used to be gated to `--backend ollama` on the grounds
+    that "free/unlimited is the point" — but that gate is backwards twice over. It let
+    through `--backend ollama --model <name>:cloud`, which is NOT free (a signed-in
+    daemon proxies it off the machine and bills every manifest item against the $60
+    allowance), and it BLOCKED z.ai, which is flat-rate, already bought, and the better
+    model besides.
+
+    The cost is per ITEM, which is why this is a hard stop rather than a warning: a
+    100-file sweep is 100 metered calls from one command, and --consensus doubles it.
+    Blocks rather than silently rerouting, following the SoundCheck guard's precedent.
+    """
+    shapes = [_batch_cost_shape(backend, m, base_url) for m in (model, consensus) if m]
+    metered = [label for ok, label in shapes if not ok]
+    if not metered or allow_metered:
+        return
+    calls = len(items) * len(metered)
+    log("ERROR: refusing a --batch fan-out over a metered route: " + "; ".join(metered))
+    log(f"  this manifest has {len(items)} item(s), so it would bill about {calls} "
+        "call(s)" + (" (--consensus doubles it)" if len(metered) > 1 else "") + ".")
+    log("  Free lanes for a fan-out of this shape:")
+    log("    --backend ollama --model gpt-oss:20b            (local, free, private)")
+    log("    --backend openai --base-url zai-coding --model glm-5.3   (flat-rate, paid for)")
+    log("  or pass --allow-metered if spending the allowance here is deliberate.")
+    sys.exit(2)
 
 
 def enforce_soundcheck_guard(args):
@@ -1325,9 +1442,9 @@ def run_batch(args, prompt):
     stays "ok" unless the failed list is non-empty. A backend error from EITHER model puts
     the item on the failed list instead of the escalation queue."""
     IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
-    if args.backend != "ollama":
-        log("ERROR: --batch runs on --backend ollama only (free/unlimited is the point; "
-            "for a handful of metered API calls, loop gemini.py directly).")
+    if args.backend not in ("ollama", "openai"):
+        log("ERROR: --batch runs on --backend ollama (local) or --backend openai "
+            "(e.g. --base-url zai-coding). Cost is checked separately, per route.")
         sys.exit(2)
     if args.file:
         log("ERROR: --batch and --file don't combine — list the inputs in the manifest.")
@@ -1354,7 +1471,15 @@ def run_batch(args, prompt):
     # gone, and the vision-v1 suite says the 3.3 GB model was the better pick regardless:
     # 100% vs 80% recall, and gemma4 INVENTED 4 fields on a tall page in 6s. See
     # references/measured-results.md "Vision REPLICATED + extended".
-    model = args.model or ("qwen3-vl:4b" if any_img else "qwen3-coder:30b")
+    if args.backend == "openai":
+        # An ollama tag is meaningless on a hosted endpoint; pick the Coding Plan model.
+        model = args.model or "glm-5.3"
+        if any_img:
+            log("ERROR: --batch with images needs a local vision model. Use "
+                "--backend ollama --model qwen3-vl:4b; the openai lane here is text-only.")
+            sys.exit(2)
+    else:
+        model = args.model or ("qwen3-vl:4b" if any_img else "qwen3-coder:30b")
     consensus = args.consensus
     temperature = args.temperature
     if consensus:
@@ -1367,6 +1492,8 @@ def run_batch(args, prompt):
         if any_img:
             log(f"note: manifest contains images — MODEL2 ({consensus}) must be a vision "
                 "model, or its votes will be silent garbage.")
+    enforce_batch_cost_guard(items, args.backend, model, consensus, args.base_url,
+                             args.allow_metered)
     sys_primary, tailored_primary = tailor_system(args.system, model, args.tag, args.no_tailor)
     if tailored_primary:
         log(f"[tailor] appended corrective clause for {', '.join(tailored_primary)} (primary)")
@@ -1385,8 +1512,9 @@ def run_batch(args, prompt):
         open(escalate_path, "w").close()
     ok, failed, consec_exit = 0, [], 0
     agreed, escalated = 0, 0
+    out_names = _unique_batch_names(items)
     for i, path in enumerate(items, 1):
-        base = os.path.basename(path)
+        base = out_names[path]
         log(f"[{i}/{len(items)}] {base} ...")
         try:
             if not os.path.exists(path):
@@ -1400,12 +1528,12 @@ def run_batch(args, prompt):
             else:
                 with open(path, "r", errors="replace") as fh:
                     item_prompt = f"{prompt}\n\n--- {base} ---\n{fh.read(24_000)}"
-            text = call_ollama(item_prompt, sys_primary, temperature, model,
-                               args.max_tokens, images)
+            text = _batch_generate(args, item_prompt, sys_primary, temperature, model,
+                                   images)
             out_path = os.path.join(out_dir, base + ".out.txt")
             if consensus:
-                text2 = call_ollama(item_prompt, sys_consensus, temperature, consensus,
-                                    args.max_tokens, images)
+                text2 = _batch_generate(args, item_prompt, sys_consensus, temperature,
+                                        consensus, images)
                 a_path = os.path.join(out_dir, base + ".A.txt")
                 b_path = os.path.join(out_dir, base + ".B.txt")
                 if _outputs_agree(text, text2):
@@ -1530,6 +1658,9 @@ def main():
     ap.add_argument("--preflight", action="store_true",
                     help="Treat the output as Python code: syntax-check it (no execution) and, on a "
                          "syntax error, auto-retry ONCE before returning. (gemini-cli backend.)")
+    ap.add_argument("--allow-metered", action="store_true", dest="allow_metered",
+                    help="permit a --batch fan-out over a :cloud tag, which bills every "
+                         "manifest item against the Ollama Cloud allowance")
     ap.add_argument("--no-tailor", action="store_true", dest="no_tailor",
                     help="Skip auto-appended per-model corrective clauses (see MODEL_PROFILES). "
                          "Route warnings for a known-bad model+tag combo still print.")
