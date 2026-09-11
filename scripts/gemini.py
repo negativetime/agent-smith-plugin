@@ -637,15 +637,17 @@ def _think_value(choice):
 
 
 def _temp0_loop_warning(backend, model, consensus, temperature, think):
-    """deepseek-v4.1-flash's thinking loops forever at temperature 0 with full thinking on
-    (4 of 4 runs on a dense spec, 2026-09-11). "off" and "low" did not loop in the gym at
-    temp 0 (1s and 13s PASS on the same task); medium/high/max are unmeasured there."""
+    """deepseek-v4.1-flash's thinking runs away at temperature 0 (2026-09-11): full thinking
+    looped forever on a dense spec in 4 of 4 runs, and even "low" hit the 900s gym timeout on
+    a review task in 2 of 4 full-suite runs (a streamed probe caught it repeating itself). Only
+    "off" has no thinking channel to run away in. The fix is the temperature, not the level:
+    at the model's default temperature, low finished that review in 29s."""
     temp0 = temperature == 0 or (consensus and temperature is None)
     loopers = [m for m in (model, consensus) if (m or "").startswith("deepseek-v4.1")]
-    if backend == "ollama" and temp0 and loopers and think not in ("off", "low"):
-        return (f"WARNING: {loopers[0]} at temperature 0 with full thinking looped forever on a "
-                "dense spec in 4 of 4 runs (2026-09-11) and never answered; add --think low "
-                "(keeps judgment: 50/8/0 in the gym) or --think off.")
+    if backend == "ollama" and temp0 and loopers and think != "off":
+        return (f"WARNING: {loopers[0]} at temperature 0 with thinking on can run away (full: "
+                "4 of 4 loops on a dense spec; low: 2 of 4 timeouts on a review, 2026-09-11). "
+                "Drop --temperature 0 and use --think low, or use --think off.")
     return None
 
 

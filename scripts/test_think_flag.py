@@ -104,14 +104,17 @@ try:
 finally:
     urllib.request.urlopen = _real_urlopen
 
-# 8a. the temp-0 loop warning fires for full thinking, and stays quiet for the two settings
-#     that held in the gym (a warning on the correct usage teaches people to ignore it)
+# 8a. the temp-0 runaway warning fires for ANY thinking at temperature 0 (low included: it hit
+#     the 900s gym timeout in 2 of 4 confirm runs) and stays quiet for the recommended usage,
+#     --think low at the default temperature (a warning on correct usage teaches people to
+#     ignore it)
 DS = "deepseek-v4.1-flash:cloud"
 for a, warn in ((("ollama", DS, None, 0, None), True),
                 (("ollama", DS, None, 0, "on"), True),
                 (("ollama", DS, None, 0, "high"), True),
-                (("ollama", DS, None, 0, "low"), False),
+                (("ollama", DS, None, 0, "low"), True),
                 (("ollama", DS, None, 0, "off"), False),
+                (("ollama", DS, None, None, "low"), False),         # the recommended usage
                 (("ollama", DS, None, None, None), False),          # default temperature ends
                 (("ollama", "gpt-oss:20b", DS, None, None), True),  # --consensus forces temp 0
                 (("ollama", "gpt-oss:20b", None, 0, None), False)):
