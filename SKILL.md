@@ -370,10 +370,14 @@ no pro tag), the cheapest DeepSeek here: $0.15 in / $0.003 cached / $0.60 out of
 doubled at peak. Same-day full suite: **50 pass / 4 fail / 4 unmeasurable**, vs v4-flash
 50/8/0 and z.ai glm-5.3 49/9/0; median 7s vs 5s vs 22s. ⚠ **Never call it with
 `--temperature 0`:** greedy decoding loops its thinking channel on dense specs (285k chars
-ending in `, , , ,`, zero answer), so the call sits until gemini.py's 600s timeout. With
-`think: false` the same task passes in 1.1s, but agent-smith cannot send that on ollama
-(`--thinking-budget` is Gemini-only). Full numbers: the `ollama-deepseek-v4.1-flash` entry
-in agent-gym's `gym.py`.
+ending in `, , , ,`, zero answer), so the call sits until gemini.py's 600s timeout.
+**`--think off` (added 2026-09-11) fixes that and nothing more.** It passes the looping task
+in 1s, but the full suite with thinking off went **44 / 14 / 0** (median 1s): it invented
+trips on BOTH halves of the EXTRACT pair (Nashville, Salem NH, a Salem-named restaurant — the
+exact production traps) and fell to TRANSLATE 1/5. So keep thinking ON at the default
+temperature for judgment work (extract, translate, review) and reserve `--think off` for
+spec-dense code. Full numbers: the `ollama-deepseek-v4.1-flash*` entries in agent-gym's
+`gym.py`.
 
 **Budget is a FRACTION, not dollars.** `GET https://ollama.com/api/usage` returns
 `limits.monthly.usage` as a fraction of the allowance and `activity.cost` as out-of-pocket
