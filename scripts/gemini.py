@@ -148,13 +148,35 @@ DEFAULT_PAID_FOR_TAG = {
 SOUNDCHECK_MARKER = "soundcheck"
 
 
+def _is_ollama_cloud_tag(model):
+    """True for BOTH registry spellings of an Ollama Cloud tag: `<name>:cloud`
+    (glm-5.3:cloud, deepseek-v4.1-flash:cloud) and `<name>:<size>-cloud` (gpt-oss:120b-cloud,
+    gpt-oss:20b-cloud), verified on ollama.com 2026-09-11. Until then only the first was
+    matched, so `gpt-oss:20b-cloud` — one suffix away from the trusted LOCAL gpt-oss:20b —
+    walked past the SoundCheck guard and the --batch cost guard as if it were on-device."""
+    name = str(model or "")
+    if ":" not in name:
+        return False
+    tag = name.rpartition(":")[2]
+    return tag == "cloud" or tag.endswith("-cloud")
+
+
 def _cloud_route(backend, model):
     """True when the resolved route leaves this machine."""
     if backend in ("gemini", "gemini-cli", "openai"):
         return True
-    # ⚠ `--backend ollama` is local ONLY without a :cloud tag; a signed-in daemon proxies
-    # `<name>:cloud` to Ollama's servers through localhost:11434, which looks identical here.
-    return backend == "ollama" and str(model or "").endswith(":cloud")
+    # ⚠ `--backend ollama` is local ONLY without a cloud tag; a signed-in daemon proxies
+    # cloud tags to Ollama's servers through localhost:11434, which looks identical here.
+    return backend == "ollama" and _is_ollama_cloud_tag(model)
+
+
+def _ollama_route_label(model):
+    """The meta-line tag for an ollama call. Until 2026-09-11 this was a hardcoded
+    "local · free · unlimited", so every `:cloud` call announced itself as the opposite of
+    what it was — metered against the Ollama Cloud allowance and off this machine."""
+    if _cloud_route("ollama", model):
+        return "Ollama Cloud · METERED · leaves this Mac"
+    return "local · free · unlimited"
 
 
 def _soundcheck_paths(args):
@@ -194,11 +216,12 @@ FREE_BATCH_ROUTES = {("ollama", False), ("openai", "zai-coding")}
 
 def _batch_cost_shape(backend, model, base_url):
     """Return (is_free, label) for a --batch route."""
-    # A :cloud suffix is an Ollama-only concept. On the ollama backend it is metered; on
-    # any other backend it is not a real model name, and a caller who typed it almost
-    # certainly believes they are on Ollama Cloud. Stop for both, since the second case
-    # is exactly the "looks local at the call site" confusion this guard exists for.
-    if str(model or "").endswith(":cloud"):
+    # A cloud tag (`:cloud` or `:<size>-cloud`) is an Ollama-only concept. On the ollama
+    # backend it is metered; on any other backend it is not a real model name, and a caller
+    # who typed it almost certainly believes they are on Ollama Cloud. Stop for both, since
+    # the second case is exactly the "looks local at the call site" confusion this guard
+    # exists for.
+    if _is_ollama_cloud_tag(model):
         if backend == "ollama":
             return False, f"{model} (Ollama Cloud, metered per token)"
         return False, (f"{model} — a :cloud tag means nothing on --backend {backend}; "
@@ -648,7 +671,7 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
     _note_reported_model(resp)
     text = resp.get("message", {}).get("content", "")
     log("\n--- ollama meta ---")
-    log(f"backend: ollama  model: {model}  (local · free · unlimited)")
+    log(f"backend: ollama  model: {model}  ({_ollama_route_label(model)})")
     pe, ec = resp.get("prompt_eval_count"), resp.get("eval_count")
     if pe is not None or ec is not None:
         log(f"tokens: prompt={pe} output={ec}")
