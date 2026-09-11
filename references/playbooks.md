@@ -155,6 +155,13 @@ the raw HTML, no code fences." > doc.html
 #  gemini-pro is the primary route, local is the offline fallback.)
 ```
 
+**Then check parity mechanically — `scripts/parity.py draft.md out.html`.** Exit 0 = every
+sentence and table cell of the draft survived; exit 1 lists what was dropped. This is the step
+that makes temp-0 drift survivable rather than invisible, and it exists as a script because the
+hand-rolled version is wrong in a way that reads as correct (see its docstring). It also warns
+when the page's text runs >1.15x the draft, since parity alone cannot see INVENTED content —
+every draft unit can be present in a page that also made things up.
+
 **temp 0 is necessary but NOT sufficient — prefer gemma4:26b or qwen3-coder:30b locally.**
 The agent-gym `doc_fidelity_html_long` task (added 2026-07-18) runs at `--temperature 0` and
 gpt-oss:20b still silently rewrote a heading, `Balancer` → `Baler`, while keeping
