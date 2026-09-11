@@ -1595,6 +1595,14 @@ def run_batch(args, prompt):
                     item_prompt = f"{prompt}\n\n--- {base} ---\n{fh.read(24_000)}"
             text = _batch_generate(args, item_prompt, sys_primary, temperature, model,
                                    images)
+            # ⚠ An empty answer is a FAILURE, not a success. Measured 2026-09-06: a
+            # 10-image vision prescreen wrote four 0-byte files and still reported
+            # {"batch": 10, "ok": 10, "failed": []}. gym.py already treats gen-empty as
+            # unmeasurable rather than a result; the batch path never did, so it was
+            # reporting the strongest possible success for no output at all.
+            if not (text or "").strip():
+                raise RuntimeError("empty response (raise --max-tokens, or the model "
+                                   "returned nothing for this input)")
             out_path = os.path.join(out_dir, base + ".out.txt")
             if consensus:
                 text2 = _batch_generate(args, item_prompt, sys_consensus, temperature,
