@@ -76,6 +76,31 @@ def main():
         print("ERROR: no matching run found.", file=sys.stderr)
         sys.exit(1)
 
+    # ---- stale-target guard ------------------------------------------------
+    # `--model` matches the ledger's model field EXACTLY, and the ledger stores
+    # the RESOLVED name the backend reported ("gemini-pro-latest"), not the
+    # shorthand that was typed ("pro"). A near-miss therefore does not error --
+    # it silently falls through to some far older run that happened to log the
+    # literal string, and the verdict lands on the wrong route. Measured
+    # 2026-09-07: `--model pro` filed a fresh doc-format verdict onto a run from
+    # 2026-07-20, seven weeks stale. Refuse rather than corrupt the weights.
+    if not args.ts:
+        try:
+            age = (datetime.datetime.now()
+                   - datetime.datetime.fromisoformat(target.get("ts", ""))).days
+        except (ValueError, TypeError):
+            age = None
+        if age is not None and age >= 1:
+            print(f"REFUSED: nearest match is {age} day(s) old "
+                  f"({target.get('ts')}, model={target.get('model')}).",
+                  file=sys.stderr)
+            print("  A fresh run should match today. This usually means --model "
+                  "did not match:\n  the ledger stores the RESOLVED name "
+                  "(e.g. 'gemini-pro-latest', not 'pro').", file=sys.stderr)
+            print("  Confirm with: usage_report.py --last 5   then re-run with "
+                  "--ts <exact ts>.", file=sys.stderr)
+            sys.exit(1)
+
     rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
            "script": "verdict", "verdict": args.verdict, "note": args.note,
            "ref_ts": target.get("ts"), "ref_model": target.get("model"),
