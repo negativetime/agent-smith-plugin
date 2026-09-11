@@ -1,0 +1,179 @@
+[
+ {
+  "id": "node",
+  "lane": "glm5.3+zai",
+  "ok": false,
+  "review": false,
+  "hit": false,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The current Active LTS version of Node.js is **Node.js 24**, while Node.js 22 remains in Maintenance LTS ([2]). Node.js 26 is the Current (non-LTS) release line ([2]).",
+  "n_src": 5,
+  "srcs": [
+   "Node.js Releases",
+   "Node.js Version Support: EOL Dates and Latest Releases ...  (Jun 23, 2026)",
+   "What are the differences between Long Term Support (LTS ...  (10 years ago)"
+  ]
+ },
+ {
+  "id": "python",
+  "lane": "glm5.3+zai",
+  "ok": true,
+  "review": false,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest stable release of Python is **Python 3.14.7**, released on August 5, 2026 [2]. Note that while Python 3.14 is the current stable series [5], Python 3.16 is under active development on the main branch and is not yet stable [1].",
+  "n_src": 5,
+  "srcs": [
+   "Status of Python versions  (2026\u5e745\u670827\u65e5)",
+   "Download Python - Python.org",
+   "What is the 'true' latest stable version of Python WRT library ... - Reddit  (2024\u5e743\u670819\u65e5)"
+  ]
+ },
+ {
+  "id": "go",
+  "lane": "glm5.3+zai",
+  "ok": true,
+  "review": false,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released version of Go is go1.26.1, a minor revision of the Go 1.26.0 major release (Go 1.26.1 released in 2026). (Source: [1] Go Release History - The Go Programming Language)",
+  "n_src": 5,
+  "srcs": [
+   "Release History - The Go Programming Language",
+   "Package version - The Go Programming Language - Google",
+   "Go Release Dashboard"
+  ]
+ },
+ {
+  "id": "swift",
+  "lane": "glm5.3+zai",
+  "ok": false,
+  "review": false,
+  "hit": false,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released version of Swift is **Swift 6.2**, which focuses on making every Swift developer more productive regardless of where or how they write Swift code (Swift.org [2]). You can learn more about recent developments, including upcoming changes discussed at WWDC26, in Apple's \"What's new in Swift\" session (Apple Developer [3]).",
+  "n_src": 5,
+  "srcs": [
+   "WWDC25: What's new in Swift | Apple - YouTube  (2025\u5e746\u67089\u65e5)",
+   "Swift 6.2 Released | Swift.org  (2025\u5e749\u670815\u65e5)",
+   "What's new in Swift - WWDC26 - Videos - Apple Developer"
+  ]
+ },
+ {
+  "id": "postgres",
+  "lane": "glm5.3+zai",
+  "ok": false,
+  "review": false,
+  "hit": false,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest stable release of PostgreSQL is **version 18.6**, released on August 13, 2026 (PostgreSQL 19 Beta 3 was also released that day but is not yet stable) [1][2][5].",
+  "n_src": 5,
+  "srcs": [
+   "Release Notes - PostgreSQL",
+   "PostgreSQL: The world's most advanced open source database",
+   "PostgreSQL - Wikipedia"
+  ]
+ },
+ {
+  "id": "rust",
+  "lane": "glm5.3+zai",
+  "ok": false,
+  "review": false,
+  "hit": false,
+  "wrong": [
+   "1\\.98"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released version of Rust is **1.98.0**, which is the current stable release (Rust Blog [1]; rust-lang/rust Releases on GitHub [3]). The next version, 1.99.0, is currently in beta and scheduled for release on 1 October 2026 (Rust Changelogs [2]).",
+  "n_src": 5,
+  "srcs": [
+   "Announcing Rust 1.98.0 - Rust Blog  (2026\u5e748\u670820\u65e5)",
+   "Rust Changelogs: Rust Versions",
+   "Releases \u00b7 rust-lang/rust - GitHub"
+  ]
+ },
+ {
+  "id": "k8s",
+  "lane": "glm5.3+zai",
+  "ok": true,
+  "review": true,
+  "hit": true,
+  "wrong": [
+   "1\\.35",
+   "1\\.37"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest released version of Kubernetes is v1.37.0, as shown in the official Kubernetes release list on GitHub and confirmed by the Kubernetes project's release page, which maintains release branches for the three most recent minor versions (1.37, 1.36, and 1.35) [1][2].",
+  "n_src": 5,
+  "srcs": [
+   "Releases - Kubernetes",
+   "Releases \u00b7 kubernetes/kubernetes - GitHub",
+   "Supported Versions of Kubernetes - Oracle Help Center  (2026\u5e748\u670820\u65e5)"
+  ]
+ },
+ {
+  "id": "ruby",
+  "lane": "glm5.3+zai",
+  "ok": true,
+  "review": false,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The current stable release of Ruby is version **4.0.6**. This is according to the official Ruby download page (source [2]).",
+  "n_src": 5,
+  "srcs": [
+   "Ruby Releases",
+   "Download Ruby",
+   "Releases \u00b7 ruby/ruby - GitHub"
+  ]
+ },
+ {
+  "id": "zig",
+  "lane": "glm5.3+zai",
+  "ok": false,
+  "review": false,
+  "hit": false,
+  "wrong": [
+   "\\b1\\.0\\b.*(stable|released)"
+  ],
+  "empty": false,
+  "contradicts": false,
+  "answer": "The latest tagged release of Zig is 0.14.0, which the Zig project had estimated tagging around January 1st [2]. There is no 1.0 stable release yet\u2014Zig remains a pre-1.0 language, and 1.0 will be its first stable release [1][3].",
+  "n_src": 5,
+  "srcs": [
+   "Which version of zig is most stable for long term? - Help - Ziggit  (2025\u5e741\u67085\u65e5)",
+   "What to Expect from Release Month - Zig Programming Language  (2025\u5e741\u670817\u65e5)",
+   "Zig is a pre-1.0 language while Rust is post-1.0. This alone is settles ..."
+  ]
+ },
+ {
+  "id": "django",
+  "lane": "glm5.3+zai",
+  "ok": true,
+  "review": false,
+  "hit": true,
+  "wrong": [],
+  "empty": false,
+  "contradicts": false,
+  "answer": "As of September 2026, the latest official release of Django is **version 6.1**, as evidenced by the current Django 6.1 documentation [4]. Note that a future calendar-based versioning scheme (e.g., 2029.0) has been accepted for upcoming releases beginning in 2029 [1].",
+  "n_src": 5,
+  "srcs": [
+   "deps/accepted/0020-annual-release-cycle.rst at main \u00b7 django/deps  (2026\u5e744\u670824\u65e5)",
+   "Why django CMS' Next Version Will Be 5.0 - Blog  (2025\u5e742\u670827\u65e5)",
+   "Django 1.0 release notes"
+  ]
+ }
+]
