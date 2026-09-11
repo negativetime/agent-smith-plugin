@@ -131,7 +131,7 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 | `gemini` | Google cloud (`GEMINI_API_KEY`) | free tier, rate-limited | **yes** | ⚠ **specialist since 2026-09-05, no longer the bulk default** — reach for it for `--file`/`--search`, the only things ONLY it can do. Its quota is the **API's**, separate from the consumer Gemini Pro plan; Pro buys this backend nothing |
 | `gemini-cli` | your OAuth login | **PAID — Josh's Google AI Pro, already bought** | no | THE lane when the free API is slow/429ing (measured 2026-07-12: 3.8s vs 50s+ congested API). This is the ONLY backend that spends the Pro plan — `--backend gemini` does not. Text-only: pipe file contents via stdin. Use what's paid for |
 | `fm` | this Mac (~3B) | free | no | private + simple bulk (`FM_HELPER` path) |
-| `ollama` | this Mac **unless the tag ends `:cloud`** | free, unlimited — **except `:cloud`** | images yes | private/offline/high-volume; the FLEET below. ⚠ **`--model <name>:cloud` is NOT local**: a signed-in daemon proxies it through `localhost:11434` to Ollama's servers, so it leaves the machine and spends the metered allowance. It looks identical to a local call at the call site — see Ollama Cloud below |
+| `ollama` | this Mac **unless the tag is a cloud tag** (`:cloud` OR `:<size>-cloud`, e.g. `gpt-oss:20b-cloud`) | free, unlimited — **except cloud tags** | images yes | private/offline/high-volume; the FLEET below. ⚠ **`--model <name>:cloud` is NOT local**: a signed-in daemon proxies it through `localhost:11434` to Ollama's servers, so it leaves the machine and spends the metered allowance. It looks identical to a local call at the call site — see Ollama Cloud below |
 | `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data** — which matters for SoundCheck material (Listen, Inc.'s IP, code-guarded) and credentials; Josh's own work is fine here |
 
 ## Local fleet routing (gym-earned; evidence → [references/measured-results.md](references/measured-results.md))
@@ -227,7 +227,9 @@ else's servers. Credentials and third-party PII stay local for the obvious reaso
 in `gemini.py`, added 2026-09-05 — the salem-bus-data lesson was that prompt rules alone
 failed and code guards fixed it). Any `--file`/`--batch` path, or a cwd, resolving under a
 path containing `soundcheck` **hard-exits (2)** on a cloud route, where "cloud" includes
-⚠ `--backend ollama --model <name>:cloud`, which looks local at the call site but is not.
+⚠ `--backend ollama --model <name>:cloud` — AND the registry's second spelling
+`<name>:<size>-cloud` (`gpt-oss:20b-cloud`), which the guard missed until 2026-09-11 — both
+of which look local at the call site but are not.
 It blocks rather than silently rerouting, because a local model may be the wrong tool for
 that task too and Josh should pick.
 
@@ -345,7 +347,8 @@ contents via stdin.
 ## Ollama Cloud — metered lane, gym/eval only — 2026-09-05
 
 $20/mo plan carrying **$60 of included usage**. Reached by suffixing a model tag with
-`:cloud` (`--backend ollama --model glm-5.3:cloud`), which the signed-in local daemon
+`:cloud` (`--backend ollama --model glm-5.3:cloud`) — or, on older catalog entries,
+`:<size>-cloud` (`gpt-oss:120b-cloud`) — which the signed-in local daemon
 proxies to Ollama's servers. No API key needed on that path; `OLLAMA_API_KEY` is only for
 the hosted `https://ollama.com/v1` endpoint.
 
@@ -360,6 +363,16 @@ discriminating capability was TRANSLATE — where z.ai's glm-5.3 scored 83% agai
 Cloud's 60% on the same weights. **Prefer z.ai for real work.** Spend this allowance on
 work where a wrong answer is cheap and caught: gym gates, `--repeat` confirm runs, building
 harder tasks, and bulk first drafts Claude verifies anyway.
+
+**DeepSeek V4.1 Flash — gated 2026-09-11, no lane.** `deepseek-v4.1-flash:cloud` (cloud only,
+no pro tag), the cheapest DeepSeek here: $0.15 in / $0.003 cached / $0.60 out off-peak,
+doubled at peak. Same-day full suite: **50 pass / 4 fail / 4 unmeasurable**, vs v4-flash
+50/8/0 and z.ai glm-5.3 49/9/0; median 7s vs 5s vs 22s. ⚠ **Never call it with
+`--temperature 0`:** greedy decoding loops its thinking channel on dense specs (285k chars
+ending in `, , , ,`, zero answer), so the call sits until gemini.py's 600s timeout. With
+`think: false` the same task passes in 1.1s, but agent-smith cannot send that on ollama
+(`--thinking-budget` is Gemini-only). Full numbers: the `ollama-deepseek-v4.1-flash` entry
+in agent-gym's `gym.py`.
 
 **Budget is a FRACTION, not dollars.** `GET https://ollama.com/api/usage` returns
 `limits.monthly.usage` as a fraction of the allowance and `activity.cost` as out-of-pocket
