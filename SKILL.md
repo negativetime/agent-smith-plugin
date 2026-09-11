@@ -514,14 +514,21 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   Studio). Ollama is the hub, not a dependency. LM Studio pilot (install, CLI, perf vs
   Ollama, a real tool-loop bug found + fixed): [references/lmstudio-pilot-2026-07-15.md](references/lmstudio-pilot-2026-07-15.md).
 - **Remote OpenAI-compatible lanes (`--base-url` shorthands):** `groq` · `openrouter` ·
-  `openai` · `ollama` · **`zai`** · **`cloudflare`**. Auth resolves per host —
+  `openai` · `ollama` · **`zai-coding`** · `zai` · **`cloudflare`**. Auth resolves per host —
   `GROQ_API_KEY` · `ZAI_API_KEY` · `CF_API_TOKEN` · else `OPENAI_API_KEY`. `cloudflare`
   also needs `CF_ACCOUNT_ID` (32-hex; a numeric id is NOT an account id and 404s with
   error 7003).
+  ⚠ **`zai` and `zai-coding` are different endpoints and only one is paid for.**
+  `zai-coding` (`api/coding/paas/v4`) is the flat-rate Coding Plan — use this one. Plain
+  `zai` (`api/paas/v4`) is the pay-per-token alias this account has **no balance on**; it
+  answers `HTTP 429 code 1113 "Insufficient balance or no resource package"`, which reads
+  like a rate limit and is not one. **This example itself said `zai` until 2026-09-07 and
+  cost a detour** — `gemini.py` warns at the call site (line ~211), but the stale example
+  is what got copied. Read the URL printed in any z.ai error before diagnosing.
   ```bash
   export ZAI_API_KEY=...        # keys live in the env, NEVER in a file
-  python3 "$SKILL/scripts/gemini.py" --backend openai --base-url zai \
-    --model glm-4.5-flash --max-tokens 3000 --tag code-draft "..."
+  python3 "$SKILL/scripts/gemini.py" --backend openai --base-url zai-coding \
+    --model glm-5.3 --max-tokens 32000 --tag code-draft "..."
   ```
 - **Vision stays LOCAL — bake-off settled 2026-07-28, do not re-litigate.** Screenshot/UI
   triage was the biggest measured offload gap (507M chars on Claude), so the Cloudflare
