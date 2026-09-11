@@ -301,11 +301,17 @@ MAX_GEN_TOKENS = 1600  # one tool call + a full file; caps temp-0 repetition loo
 # NOTE: a single native write_file call bigger than this gets TRUNCATED mid-JSON and
 # Ollama 500s ("error parsing tool call"). Raise per-run with --max-gen-tokens.
 
+# Ollama `think` field, set from --think (None = the model's default). This loop runs at
+# temperature 0, which is exactly where deepseek-v4.1-flash's thinking loops forever.
+THINK = None
+
 
 def chat(model, messages, num_ctx, tools=True):
     payload = {"model": model, "messages": messages, "stream": False,
                "options": {"temperature": 0, "num_ctx": num_ctx,
                            "num_predict": MAX_GEN_TOKENS}}
+    if THINK is not None:
+        payload["think"] = THINK
     if tools:
         payload["tools"] = TOOLS
     req = urllib.request.Request(OLLAMA + "/api/chat",
@@ -418,7 +424,7 @@ def _ledger(rec):
 
 
 def main():
-    global MAX_GEN_TOKENS
+    global MAX_GEN_TOKENS, THINK
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--workdir", required=True)
@@ -446,8 +452,16 @@ def main():
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
                          "(measured null result on qwen2.5-coder:14b, 2026-07-01)")
+    ap.add_argument("--think", choices=["on", "off", "low", "medium", "high", "max"],
+                    default=None,
+                    help="ollama backend only: send Ollama's `think` field (default: the "
+                         "model's own). 'off' fixes deepseek-v4.1-flash's temp-0 reasoning "
+                         "loop; gpt-oss ignores 'off' and needs a level such as 'low'.")
     args = ap.parse_args()
     MAX_GEN_TOKENS = args.max_gen_tokens
+    if args.think and args.backend != "ollama":
+        ap.error(f"--think only applies to --backend ollama (got --backend {args.backend})")
+    THINK = {"on": True, "off": False}.get(args.think, args.think)
 
     workdir = os.path.realpath(args.workdir)
     with open(args.prompt_file) as f:
@@ -613,7 +627,8 @@ def main():
         tlog.close()
     print(json.dumps(summary))
     _ledger({"script": "smith_agent", "backend": backend, "model": args.model,
-             "tag": args.tag, "workdir": workdir, "task": task[:120], **summary})
+             "tag": args.tag, "think": args.think, "workdir": workdir, "task": task[:120],
+             **summary})
 
 
 if __name__ == "__main__":

@@ -108,7 +108,8 @@ python3 "$SKILL/scripts/gemini.py" --backend ollama --model llama3.2:3b \
 
 Windows: same flags, `python` launcher, `Get-Content` for stdin.
 **Flags:** `--tag` (REQUIRED) · `--model` · `--system` · `--file` (repeatable) · `--search` ·
-`--json`/`--schema` · `--temperature` · `--max-tokens` · `--thinking-budget N` ·
+`--json`/`--schema` · `--temperature` · `--max-tokens` · `--thinking-budget N` (Gemini) ·
+`--think on|off|low|medium|high|max` (ollama; gpt-oss ignores `off`, use `low`) ·
 `--preflight` (gemini-cli syntax check) · `--list-models` · `--no-tailor` (below).
 API internals: [references/gemini-api.md](references/gemini-api.md).
 

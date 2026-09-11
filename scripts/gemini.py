@@ -286,7 +286,8 @@ def _batch_generate(args, prompt, system, temperature, model, images):
     if args.backend == "openai":
         return call_openai_compat(prompt, system, temperature, model,
                                   args.max_tokens, args.base_url)
-    return call_ollama(prompt, system, temperature, model, args.max_tokens, images)
+    return call_ollama(prompt, system, temperature, model, args.max_tokens, images,
+                       think=_think_value(args.think))
 
 
 def enforce_batch_cost_guard(items, backend, model, consensus, base_url, allow_metered):
@@ -622,9 +623,25 @@ def call_fm(prompt, system, temperature):
     return d.get("answer", "")
 
 
-def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
+# --think values -> Ollama's `think` field. "on"/"off" are booleans; the levels pass through
+# as strings (docs/api.md: "Can be a boolean or a thinking level ("low", "medium", "high",
+# or "max")"). ⚠ gpt-oss IGNORES false: it burns the budget on hidden reasoning and returns
+# empty content (measured 2026-09-08), so it needs a level such as "low" instead.
+THINK_CHOICES = ("on", "off", "low", "medium", "high", "max")
+
+
+def _think_value(choice):
+    if choice is None:
+        return None
+    return {"on": True, "off": False}.get(choice, choice)
+
+
+def call_ollama(prompt, system, temperature, model, max_tokens, images=None, think=None):
     """Local model via Ollama (http://localhost:11434). Free, unlimited, offline.
-    images: optional list of base64-encoded image bytes (needs a vision model, e.g. gemma4:26b)."""
+    images: optional list of base64-encoded image bytes (needs a vision model, e.g. gemma4:26b).
+    think: None leaves the model's default; True/False or a level is sent as Ollama's `think`
+    field. Added 2026-09-11 for deepseek-v4.1-flash, whose thinking loops forever at
+    temperature 0 on a dense spec and which passes the same spec in 1.1s with it off."""
     model = model or os.environ.get("OLLAMA_MODEL") or "qwen3-coder:30b"
     msgs = []
     if system:
@@ -634,6 +651,8 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
         user_msg["images"] = images
     msgs.append(user_msg)
     body = {"model": model, "messages": msgs, "stream": False}
+    if think is not None:
+        body["think"] = think
     opts = {}
     if temperature is not None:
         opts["temperature"] = temperature
@@ -670,11 +689,19 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None):
         sys.exit(1)
     _note_reported_model(resp)
     text = resp.get("message", {}).get("content", "")
+    thinking = resp.get("message", {}).get("thinking") or ""
     log("\n--- ollama meta ---")
     log(f"backend: ollama  model: {model}  ({_ollama_route_label(model)})")
     pe, ec = resp.get("prompt_eval_count"), resp.get("eval_count")
     if pe is not None or ec is not None:
         log(f"tokens: prompt={pe} output={ec}")
+    if think is not None or thinking:
+        log(f"think: {'default' if think is None else think}  thinking chars: {len(thinking)}")
+    if think is False and thinking:
+        # A model that ignores the switch is worse than one without it: the caller
+        # believes thinking is off. gpt-oss does exactly this and can return EMPTY content.
+        log(f"WARNING: {model} ignored think=false and thought anyway ({len(thinking)} chars); "
+            "use a level such as --think low for this model.")
     return text
 
 
@@ -1604,7 +1631,7 @@ def run_batch(args, prompt):
            "purpose": _subject(prompt, args.purpose), "tag": args.tag,
            "batch": len(items), "ok": ok, "failed_count": len(failed),
            "images": sum(1 for p in items if p.lower().endswith(IMG_EXTS)) or None,
-           "tailored": tailored_primary or None,
+           "tailored": tailored_primary or None, "think": args.think,
            "tailored_consensus": tailored_consensus or None,
            "seconds": summary["seconds"],
            # escalations are successes awaiting review — only real failures flip status
@@ -1655,6 +1682,12 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=None, dest="max_tokens")
     ap.add_argument("--thinking-budget", type=int, default=None, dest="thinking_budget",
                     help="Token budget for model 'thinking' (0 = off, faster/cheaper on Flash).")
+    ap.add_argument("--think", choices=THINK_CHOICES, default=None,
+                    help="ollama backend only: send Ollama's `think` field, on|off or a level "
+                         "low|medium|high|max (default: the model's own). 'off' fixes "
+                         "deepseek-v4.1-flash's temp-0 reasoning loop (1.1s PASS vs no answer). "
+                         "gpt-oss IGNORES 'off' and returns empty content; use 'low' for it. "
+                         "Gemini's equivalent is --thinking-budget.")
     ap.add_argument("--list-models", action="store_true", help="List models this key can use, then exit.")
     ap.add_argument("--batch", metavar="MANIFEST",
                     help="Batch mode (ollama backend only): file listing one input path per "
@@ -1766,6 +1799,23 @@ def main():
     args.backend = args.backend or "gemini"
     enforce_soundcheck_guard(args)
 
+    if args.think:
+        # Refuse rather than ignore: a switch that silently does nothing is the house bug
+        # class. Gemini's equivalent is --thinking-budget; OpenAI-compatible hosts each
+        # spell it differently, so there is nothing safe to forward there.
+        if args.backend != "ollama":
+            log(f"ERROR: --think only applies to --backend ollama (got --backend "
+                f"{args.backend}); for Gemini use --thinking-budget.")
+            sys.exit(2)
+        if args.think == "off" and "gpt-oss" in (args.model or ""):
+            log("WARNING: gpt-oss ignores think=false and can return EMPTY content "
+                "(measured 2026-09-08); pass --think low instead.")
+    temp0 = args.temperature == 0 or (args.consensus and args.temperature is None)
+    loopers = [m for m in (args.model, args.consensus) if (m or "").startswith("deepseek-v4.1")]
+    if args.backend == "ollama" and temp0 and loopers and args.think != "off":
+        log(f"WARNING: {loopers[0]} at temperature 0 with thinking on looped forever on a dense "
+            "spec in 4 of 4 runs (2026-09-11) and never answered; add --think off.")
+
     if args.consensus and (not args.batch or args.backend != "ollama"):
         log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "
             "(two local models vote per item; disagreement fires escalation).")
@@ -1841,7 +1891,7 @@ def main():
             text = call_fm(prompt, sys_eff, args.temperature)
         elif args.backend == "ollama":
             text = call_ollama(prompt, sys_eff, args.temperature, model_eff,
-                               args.max_tokens, images)
+                               args.max_tokens, images, think=_think_value(args.think))
         elif args.backend == "openai":
             text = call_openai_compat(prompt, sys_eff, args.temperature, args.model,
                                       args.max_tokens, args.base_url,
@@ -1856,7 +1906,7 @@ def main():
                  "files": [os.path.basename(f) for f in args.file] or None,
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "images": len(images) or None, "tailored": tailored or None,
-                 "search": bool(args.search) or None,
+                 "search": bool(args.search) or None, "think": args.think,
                  "seconds": round(time.time() - t0, 1), "status": "ok"},
                 output=text)
         if args.backend == "ollama":
