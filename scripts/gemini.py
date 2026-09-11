@@ -636,6 +636,19 @@ def _think_value(choice):
     return {"on": True, "off": False}.get(choice, choice)
 
 
+def _temp0_loop_warning(backend, model, consensus, temperature, think):
+    """deepseek-v4.1-flash's thinking loops forever at temperature 0 with full thinking on
+    (4 of 4 runs on a dense spec, 2026-09-11). "off" and "low" did not loop in the gym at
+    temp 0 (1s and 13s PASS on the same task); medium/high/max are unmeasured there."""
+    temp0 = temperature == 0 or (consensus and temperature is None)
+    loopers = [m for m in (model, consensus) if (m or "").startswith("deepseek-v4.1")]
+    if backend == "ollama" and temp0 and loopers and think not in ("off", "low"):
+        return (f"WARNING: {loopers[0]} at temperature 0 with full thinking looped forever on a "
+                "dense spec in 4 of 4 runs (2026-09-11) and never answered; add --think low "
+                "(keeps judgment: 50/8/0 in the gym) or --think off.")
+    return None
+
+
 def call_ollama(prompt, system, temperature, model, max_tokens, images=None, think=None):
     """Local model via Ollama (http://localhost:11434). Free, unlimited, offline.
     images: optional list of base64-encoded image bytes (needs a vision model, e.g. gemma4:26b).
@@ -1810,11 +1823,10 @@ def main():
         if args.think == "off" and "gpt-oss" in (args.model or ""):
             log("WARNING: gpt-oss ignores think=false and can return EMPTY content "
                 "(measured 2026-09-08); pass --think low instead.")
-    temp0 = args.temperature == 0 or (args.consensus and args.temperature is None)
-    loopers = [m for m in (args.model, args.consensus) if (m or "").startswith("deepseek-v4.1")]
-    if args.backend == "ollama" and temp0 and loopers and args.think != "off":
-        log(f"WARNING: {loopers[0]} at temperature 0 with thinking on looped forever on a dense "
-            "spec in 4 of 4 runs (2026-09-11) and never answered; add --think off.")
+    loop_warning = _temp0_loop_warning(args.backend, args.model, args.consensus,
+                                       args.temperature, args.think)
+    if loop_warning:
+        log(loop_warning)
 
     if args.consensus and (not args.batch or args.backend != "ollama"):
         log("ERROR: --consensus MODEL2 only works with --batch on --backend ollama "

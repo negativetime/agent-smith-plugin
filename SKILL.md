@@ -371,13 +371,19 @@ doubled at peak. Same-day full suite: **50 pass / 4 fail / 4 unmeasurable**, vs 
 50/8/0 and z.ai glm-5.3 49/9/0; median 7s vs 5s vs 22s. ⚠ **Never call it with
 `--temperature 0`:** greedy decoding loops its thinking channel on dense specs (285k chars
 ending in `, , , ,`, zero answer), so the call sits until gemini.py's 600s timeout.
-**`--think off` (added 2026-09-11) fixes that and nothing more.** It passes the looping task
-in 1s, but the full suite with thinking off went **44 / 14 / 0** (median 1s): it invented
-trips on BOTH halves of the EXTRACT pair (Nashville, Salem NH, a Salem-named restaurant — the
-exact production traps) and fell to TRANSLATE 1/5. So keep thinking ON at the default
-temperature for judgment work (extract, translate, review) and reserve `--think off` for
-spec-dense code. Full numbers: the `ollama-deepseek-v4.1-flash*` entries in agent-gym's
-`gym.py`.
+**Run it with `--think low`** (the `--think` flag was added 2026-09-11). Same-day full suite:
+
+| V4.1 setting | pass / fail / unmeas | median | TRANSLATE | EXTRACT |
+|---|---|---|---|---|
+| thinking on (default) | 50 / 4 / 4 | 7s | 3/5 | 2/2 |
+| `--think low` | **50 / 8 / 0** | 5s | 2/5 | 2/2 |
+| `--think off` | 44 / 14 / 0 | 1s | 1/5 | 0/2 |
+
+Low keeps the judgment and loses the loop (13s PASS at temp 0 on the task that looped). Off
+loses both: it invents trips on the EXTRACT pair (Nashville, Salem NH, a Salem-named
+restaurant — the production traps). Low ties v4-flash (50/8/0) and z.ai glm-5.3 (49/9/0) at
+a quarter of glm's wall-clock, one run each. Full numbers: the `ollama-deepseek-v4.1-flash*`
+entries in agent-gym's `gym.py`.
 
 **Budget is a FRACTION, not dollars.** `GET https://ollama.com/api/usage` returns
 `limits.monthly.usage` as a fraction of the allowance and `activity.cost` as out-of-pocket
