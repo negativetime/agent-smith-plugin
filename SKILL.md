@@ -384,7 +384,9 @@ Low confirmed 4/4 on code-gen, app-build, edit, design, docs, extract and ground
 passes the task full thinking loops on. But at temp 0 even low ran away on a review task in
 2 of 4 runs (900s timeout), so drop `--temperature 0`; gemini.py warns on it. Off never runs
 away but invents trips on the EXTRACT pair (Nashville, Salem NH — the production traps). Not
-for review or translation. Full numbers: the `ollama-deepseek-v4.1-flash*`
+**Decision (Josh, 2026-09-11): z.ai stays the default for bulk; V4.1 at `--think low`, default
+temperature, is the lane for spending the Ollama allowance on Claude-verified CODE and
+EXTRACTION drafts** — not review, not translation. Full numbers: the `ollama-deepseek-v4.1-flash*`
 entries in agent-gym's `gym.py`.
 
 **Budget is a FRACTION, not dollars.** `GET https://ollama.com/api/usage` returns
