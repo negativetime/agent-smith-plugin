@@ -29,6 +29,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import uuid
 import urllib.request
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
@@ -37,6 +38,51 @@ READ_LIMIT = 16000     # chars of a file the model may see at once
 OUT_LIMIT = 6000       # chars of stdout/stderr per command
 CMD_TIMEOUT = 90       # seconds per run_command
 DENY = ("sudo", "rm -rf /", "shutdown", "reboot", "diskutil", "> /dev/")
+
+# Repo mode only: commands that reach OUTSIDE the worktree, or publish. Regex with word
+# boundaries rather than DENY substrings, because "gh " is a substring of "through ".
+# Gated to repo mode so the gym's sandbox baselines keep their measured behaviour.
+DENY_RE = (
+    r"\bgit\s+push\b",
+    r"\bgit\s+remote\b",
+    r"\bgit\s+config\s+--global\b",
+    r"(?:^|[|;&(]\s*)gh\s",
+)
+
+# Repo-mode state. WRITE_SCOPE gates write_file ADVISORY-only: run_command hands the model
+# a shell, so the authoritative gate is the settlement diff (see settle_repo). READ_SCOPE
+# only filters list_files and is likewise not a boundary.
+WRITE_SCOPE = None
+READ_SCOPE = None
+REPO_MODE = False
+SCOPE_SRC = {}   # raw glob strings, for error messages
+
+
+def glob_to_re(glob: str):
+    """Translate a scope glob to a regex. `**` spans separators, `*`/`?` do not."""
+    out, i = [], 0
+    while i < len(glob):
+        c = glob[i]
+        if c == "*":
+            if glob[i + 1:i + 2] == "*":
+                out.append(".*")
+                i += 2
+                if glob[i:i + 1] == "/":   # `a/**/b` should also match `a/b`
+                    out.append("(?:|(?<=/))")
+                    i += 1
+                continue
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def in_scope(path: str, scope) -> bool:
+    """True if `path` (repo-relative, forward slashes) matches any glob in `scope`."""
+    return any(rx.match(path) for rx in scope or ())
 
 # The MINIMAL-CODE block is adapted from Ponytail (github.com/DietrichGebert/ponytail),
 # A/B-validated in agent-gym 2026-07-14: pass rate held/improved on all 3 fleet models,
@@ -131,6 +177,8 @@ def t_list_files(workdir, path="."):
         dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".git", ".pytest_cache")]
         for fn in sorted(filenames):
             rel = os.path.relpath(os.path.join(dirpath, fn), os.path.realpath(workdir))
+            if READ_SCOPE is not None and not in_scope(rel.replace(os.sep, "/"), READ_SCOPE):
+                continue
             size = os.path.getsize(os.path.join(dirpath, fn))
             lines.append(f"{rel}  ({size} bytes)")
             count += 1
@@ -160,6 +208,15 @@ def t_write_file(workdir, path, content):
     full = _resolve(workdir, path)
     if not full:
         return "ERROR: path escapes the project root"
+    rel = os.path.relpath(full, os.path.realpath(workdir)).replace(os.sep, "/")
+    if rel == ".git" or rel.startswith(".git/"):
+        # In a LINKED worktree `.git` is a FILE holding the gitdir pointer; overwriting it
+        # breaks the worktree in a way that reads as a git bug.
+        return "ERROR: writing to .git is not allowed"
+    if WRITE_SCOPE is not None and not in_scope(rel, WRITE_SCOPE):
+        return ("ERROR: path is outside the task's write scope: " + rel +
+                "\nAllowed: " + ", ".join(SCOPE_SRC.get("write", [])) +
+                "\nChange a file inside the scope instead.")
     os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
     with open(full, "w") as f:
         f.write(content)
@@ -170,6 +227,9 @@ def t_run_command(workdir, command):
     low = command.lower()
     if any(bad in low for bad in DENY):
         return "ERROR: command blocked by policy"
+    if REPO_MODE and any(re.search(p, low) for p in DENY_RE):
+        return ("ERROR: command blocked in repo mode (it would reach outside the worktree "
+                "or publish). Read-only git is fine.")
     try:
         p = subprocess.run(["/bin/bash", "-c", command], cwd=workdir,
                            capture_output=True, text=True, timeout=CMD_TIMEOUT)
@@ -423,12 +483,218 @@ def _ledger(rec):
         pass
 
 
+# ---------------------------------------------------------------- repo mode
+
+# Build artifacts the VERIFY command itself creates (the task tells the model to run
+# pytest, which writes __pycache__). These are never deliverables, so they must not fail an
+# otherwise clean run — but they are unstaged and REPORTED as `artifacts`, never hidden.
+# A repo with a complete .gitignore never gets here; this exists because most do not.
+ARTIFACT_GLOBS = ("**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**", "**/.DS_Store")
+
+
+class RepoError(Exception):
+    """Preflight or settlement refusal. Raised BEFORE the model runs wherever possible."""
+
+
+def git(cwd, *args, binary=False):
+    p = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
+                       text=not binary)
+    if p.returncode != 0:
+        err = p.stderr if not binary else p.stderr.decode(errors="replace")
+        raise RepoError(f"git {' '.join(args)}: {err.strip()}")
+    return p.stdout if binary else p.stdout.strip()
+
+
+FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+CONTRACT_KEYS = {"model", "backend", "tag", "base_url", "api_key_env",
+                 "completions_path", "think", "verify", "write_scope", "read_scope",
+                 "allow_delete", "max_turns", "max_gen_tokens", "num_ctx"}
+
+
+def parse_contract(path):
+    """Parse a task contract: `---` front matter then the task prose.
+
+    Values are JSON where it parses (lists, bools, numbers) and a bare string otherwise,
+    so `write_scope: ["a/**"]` and `model: glm-4.6` both work without a YAML dependency.
+    """
+    raw = open(path).read()
+    m = FM_RE.match(raw)
+    if not m:
+        raise RepoError(f"{path}: contract must open with a --- front-matter block")
+    meta = {}
+    for ln in m.group(1).splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        if ":" not in ln:
+            raise RepoError(f"{path}: contract line is not `key: value`: {ln}")
+        k, v = ln.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if k not in CONTRACT_KEYS:
+            raise RepoError(f"{path}: unknown contract key {k!r} "
+                            f"(known: {', '.join(sorted(CONTRACT_KEYS))})")
+        try:
+            meta[k] = json.loads(v)
+        except ValueError:
+            meta[k] = v.strip("'\"")
+    body = raw[m.end():].strip()
+    if not body:
+        raise RepoError(f"{path}: contract has no task body after the front matter")
+    return meta, body
+
+
+# An unbounded scope is the same as no scope, so it is refused rather than silently
+# passing everything. `.git` is refused because writing there breaks the worktree.
+BAD_SCOPE = {"**", "*", "**/*", ".", "./**", "/", ""}
+
+
+def validate_scope(globs, kind):
+    if not globs:
+        raise RepoError(f"repo mode requires --{kind}-scope (an unscoped run has no gate)")
+    out = []
+    for g in globs:
+        g = g.strip()
+        if g in BAD_SCOPE:
+            raise RepoError(f"--{kind}-scope {g!r} matches the whole repo; scope it down")
+        if g.startswith("/") or g.startswith("~"):
+            raise RepoError(f"--{kind}-scope {g!r} must be relative to the repo root")
+        if ".." in g.split("/"):
+            raise RepoError(f"--{kind}-scope {g!r} escapes the repo root")
+        if g == ".git" or g.startswith(".git/"):
+            raise RepoError(f"--{kind}-scope {g!r} targets .git")
+        out.append(glob_to_re(g))
+    return out
+
+
+def preflight_repo(repo, wt_path):
+    """Refuse at launch, not retroactively. Returns the base commit SHA."""
+    if not os.path.isdir(repo):
+        raise RepoError(f"--repo is not a directory: {repo}")
+    try:
+        git(repo, "rev-parse", "--git-dir")
+    except RepoError:
+        raise RepoError(f"--repo is not a git repository: {repo}")
+    if os.path.exists(wt_path):
+        raise RepoError(f"worktree path already exists: {wt_path}\n"
+                        f"A crashed earlier run leaves one behind. Clean up with:\n"
+                        f"  git -C {repo} worktree remove --force {wt_path}")
+    # A dirty main tree is fine: the worktree is built from HEAD and is independent of it.
+    return git(repo, "rev-parse", "HEAD")
+
+
+def carry_ignored(repo, wt, paths):
+    """cp -R gitignored assets into the worktree. NEVER symlink: symlinking into a
+    worktree once left the SOURCE tree holding self-referential symlinks after
+    `git worktree remove`, with the real directories no longer reachable there."""
+    import shutil
+    for rel in paths:
+        src = os.path.join(repo, rel)
+        if not os.path.exists(src):
+            raise RepoError(f"--carry-ignored path does not exist: {src}")
+        dst = os.path.join(wt, rel)
+        os.makedirs(os.path.dirname(dst) or wt, exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=False)
+        else:
+            shutil.copy2(src, dst)
+
+
+def settle_repo(repo, wt, base, allow_delete, mode, patch_path):
+    """The authoritative gate. Diffs the worktree against the RECORDED BASE, never against
+    worktree HEAD, so a model that commits, amends or checks out cannot hide a change."""
+    git(wt, "add", "-A")
+    artifact_re = [glob_to_re(g) for g in ARTIFACT_GLOBS]
+    staged = git(wt, "diff", "--cached", "--name-only", base).splitlines()
+    artifacts = sorted(p for p in staged if in_scope(p, artifact_re))
+    if artifacts:
+        git(wt, "reset", "-q", "--", *artifacts)
+    ns = git(wt, "diff", "--cached", "--no-renames", "--name-status", base)
+    files, violations = [], []
+    for line in ns.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        status, path = parts[0], parts[-1]
+        files.append({"status": status, "path": path})
+        if not in_scope(path, WRITE_SCOPE):
+            violations.append({"path": path, "status": status,
+                               "why": "outside write scope"})
+        elif status.startswith("D") and not allow_delete:
+            violations.append({"path": path, "status": status,
+                               "why": "deletion without --allow-delete"})
+
+    res = {"settled": False, "base": base, "files": files, "violations": violations,
+           "artifacts": artifacts, "patch": None, "worktree": wt}
+    if violations:
+        res["reason"] = "scope_violation"
+        with open(wt + ".violations.json", "w") as f:
+            json.dump(res, f, indent=2)
+        return res
+    if not files:
+        # An empty diff is a failure, not a pass. `did_write` only sees write_file, so a
+        # run_command-only session would otherwise report a false completion.
+        res["reason"] = "no_diff"
+        return res
+
+    if mode == "patch":
+        blob = git(wt, "diff", "--cached", "--binary", base, binary=True)
+        with open(patch_path, "wb") as f:
+            f.write(blob)
+        res["patch"] = patch_path
+    elif mode == "branch":
+        branch = "smith/" + os.path.basename(wt)
+        git(wt, "checkout", "-b", branch)
+        git(wt, "-c", "user.name=smith_agent",
+            "-c", "user.email=smith@local", "commit", "-m",
+            "smith_agent draft (unverified)")
+        res["branch"] = branch
+    res["settled"] = True
+    res["reason"] = "ok"
+    return res
+
+
+def teardown_worktree(repo, wt, carried):
+    """Remove the worktree ONLY after a clean pass, and only once the patch is written."""
+    listing = None
+    if carried:
+        # `du` reports 0B for a broken symlink and reads as success; `ls -la` does not.
+        listing = subprocess.run(["ls", "-la", *[os.path.join(repo, c) for c in carried]],
+                                 capture_output=True, text=True).stdout
+    git(repo, "worktree", "remove", "--force", wt)
+    if carried:
+        after = subprocess.run(["ls", "-la", *[os.path.join(repo, c) for c in carried]],
+                               capture_output=True, text=True).stdout
+        if after != listing:
+            raise RepoError("carried assets in the SOURCE tree changed across worktree "
+                            "removal — inspect before trusting them:\n" + after)
+
+
 def main():
-    global MAX_GEN_TOKENS, THINK
+    global MAX_GEN_TOKENS, THINK, WRITE_SCOPE, READ_SCOPE, REPO_MODE
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--workdir", required=True)
-    ap.add_argument("--prompt-file", required=True)
+    ap.add_argument("--model", default=None,
+                    help="required, unless the contract supplies it")
+    ap.add_argument("--workdir", default=None,
+                    help="sandbox mode: a throwaway directory the model owns entirely")
+    ap.add_argument("--repo", default=None,
+                    help="repo mode: a real git repo. Runs in a disposable worktree under "
+                         "--write-scope and settles to a patch. Excludes --workdir.")
+    ap.add_argument("--prompt-file", default=None)
+    ap.add_argument("--contract", default=None,
+                    help="task contract: --- front matter (model, write_scope, verify, "
+                         "...) then the task prose. Replaces --prompt-file.")
+    ap.add_argument("--write-scope", action="append", default=None, metavar="GLOB",
+                    help="repo mode, repeatable, REQUIRED. `**` spans directories.")
+    ap.add_argument("--read-scope", action="append", default=None, metavar="GLOB",
+                    help="repo mode, repeatable. ADVISORY: filters list_files only. "
+                         "run_command has a shell, so this is not a boundary.")
+    ap.add_argument("--allow-delete", action="store_true",
+                    help="permit deletions in the settled diff (default: refuse)")
+    ap.add_argument("--carry-ignored", action="append", default=None, metavar="PATH",
+                    help="cp -R a gitignored asset into the worktree. Never symlinked.")
+    ap.add_argument("--settle", choices=["patch", "branch", "none"], default="patch",
+                    help="patch (default) writes a .patch and removes the worktree; "
+                         "branch commits on a smith/* branch; none just reports.")
     ap.add_argument("--max-turns", type=int, default=25)
     ap.add_argument("--num-ctx", type=int, default=32768)
     ap.add_argument("--backend", choices=["ollama", "gemini", "openai"], default="ollama")
@@ -458,14 +724,80 @@ def main():
                          "model's own). 'off' fixes deepseek-v4.1-flash's temp-0 reasoning "
                          "loop; gpt-oss ignores 'off' and needs a level such as 'low'.")
     args = ap.parse_args()
+
+    # Contract supplies defaults; an explicit CLI flag always wins.
+    meta, task = {}, None
+    try:
+        if args.contract:
+            meta, task = parse_contract(args.contract)
+            for k, v in meta.items():
+                if k != "verify" and hasattr(args, k) and getattr(args, k) == ap.get_default(k):
+                    setattr(args, k, v)
+    except RepoError as exc:
+        ap.error(str(exc))
+
+    if bool(args.repo) == bool(args.workdir):
+        ap.error("give exactly one of --repo (a real repository) or --workdir (a sandbox)")
+    if not args.model:
+        ap.error("--model is required (pass the flag, or set it in the contract)")
+    if task is None:
+        if not args.prompt_file:
+            ap.error("give --prompt-file or --contract")
+        with open(args.prompt_file) as f:
+            task = f.read()
+    if meta.get("verify"):
+        task += ("\n\nVerify your change by running exactly this command, and do not call "
+                 "finish until it passes:\n    " + meta["verify"])
+    if not args.repo and (args.write_scope or args.read_scope or args.carry_ignored):
+        ap.error("--write-scope/--read-scope/--carry-ignored only apply to --repo")
+    if args.repo and not args.write_scope:
+        # Refuse at launch, before a worktree exists: an unscoped run has no gate.
+        ap.error("--repo requires at least one --write-scope glob (or write_scope in the "
+                 "contract); an unscoped run has no gate")
+
     MAX_GEN_TOKENS = args.max_gen_tokens
     if args.think and args.backend != "ollama":
         ap.error(f"--think only applies to --backend ollama (got --backend {args.backend})")
     THINK = {"on": True, "off": False}.get(args.think, args.think)
 
-    workdir = os.path.realpath(args.workdir)
-    with open(args.prompt_file) as f:
-        task = f.read()
+    repo = wt = base = patch_path = None
+    carried = args.carry_ignored or []
+    REPO_MODE = bool(args.repo)
+    WRITE_SCOPE = READ_SCOPE = None
+    SCOPE_SRC.clear()
+    if args.repo:
+        repo = os.path.realpath(args.repo)
+        wtroot = os.environ.get("SMITH_WORKTREES") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "worktrees")
+        wt = os.path.join(wtroot, "wt-" + time.strftime("%Y%m%d-%H%M%S")
+                          + "-" + uuid.uuid4().hex[:6])
+        patch_path = wt + ".patch"
+        try:
+            WRITE_SCOPE = validate_scope(args.write_scope, "write")
+            SCOPE_SRC["write"] = args.write_scope
+            if args.read_scope:
+                # Union in the write scope: hiding the files the task must edit is never
+                # what the author meant by a narrow read scope.
+                READ_SCOPE = validate_scope(args.read_scope, "read") + WRITE_SCOPE
+                SCOPE_SRC["read"] = args.read_scope
+            base = preflight_repo(repo, wt)
+            os.makedirs(wtroot, exist_ok=True)
+            git(repo, "worktree", "add", "--detach", wt, base)
+        except RepoError as exc:
+            print(json.dumps({"finished": False, "settled": False, "turns": 0,
+                              "seconds": 0.0, "stop": "preflight", "error": str(exc)}))
+            sys.exit(2)
+        try:
+            if carried:
+                carry_ignored(repo, wt, carried)
+        except RepoError as exc:
+            git(repo, "worktree", "remove", "--force", wt)
+            print(json.dumps({"finished": False, "settled": False, "turns": 0,
+                              "seconds": 0.0, "stop": "preflight", "error": str(exc)}))
+            sys.exit(2)
+        workdir = wt
+    else:
+        workdir = os.path.realpath(args.workdir)
 
     tlog = None
     if args.transcript:
@@ -622,13 +954,56 @@ def main():
         stop = f"{stop}_no_write"
     summary = {"finished": really_finished, "turns": turn,
                "seconds": round(time.time() - t0, 1), "stop": stop}
+
+    if REPO_MODE:
+        # The DIFF is the truth here: it sees the run_command writes that did_write never
+        # sees, and it is taken against the RECORDED BASE, never against worktree HEAD.
+        try:
+            res = settle_repo(repo, wt, base, args.allow_delete, args.settle, patch_path)
+        except RepoError as exc:
+            res = {"settled": False, "reason": "settle_error: " + str(exc), "base": base,
+                   "files": [], "violations": [], "artifacts": [], "patch": None}
+        summary["settled"] = res["settled"]
+        summary["base"] = res["base"]
+        summary["patch"] = res["patch"]
+        summary["files"] = [f"{f['status']}\t{f['path']}" for f in res["files"]]
+        summary["violations"] = res["violations"]
+        if res.get("artifacts"):
+            summary["artifacts"] = res["artifacts"]
+        summary["finished"] = res["settled"]
+        if res.get("branch"):
+            summary["branch"] = res["branch"]
+        if not res["settled"]:
+            # Never let the settle reason MASK a loop failure: a 404 that produced no diff
+            # is an error, not "the model changed nothing", and relabelling it reads as a
+            # clean no-op run.
+            summary["loop_stop"] = stop
+            if not stop.startswith("error:"):
+                summary["stop"] = {"no_diff": "finish_no_diff",
+                                   "scope_violation": "scope_violation"}.get(
+                                       res["reason"], res["reason"])
+            summary["worktree"] = wt          # kept, so the failure can be inspected
+        elif args.settle == "patch":
+            try:
+                teardown_worktree(repo, wt, carried)
+            except RepoError as exc:
+                summary["teardown_warning"] = str(exc)
+                summary["worktree"] = wt
+        else:
+            summary["worktree"] = wt
     log("summary", summary)
     if tlog:
         tlog.close()
     print(json.dumps(summary))
+    led = dict(summary)
+    # Keep the ledger one-line-per-run: counts, not the whole file list.
+    if REPO_MODE:
+        led["files"] = len(summary["files"])
+        led["violations"] = len(summary["violations"])
+        led["artifacts"] = len(summary.get("artifacts", []))
     _ledger({"script": "smith_agent", "backend": backend, "model": args.model,
              "tag": args.tag, "think": args.think, "workdir": workdir, "task": task[:120],
-             **summary})
+             **led})
 
 
 if __name__ == "__main__":

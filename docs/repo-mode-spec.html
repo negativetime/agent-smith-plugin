@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<!-- agent-smith html-doc-shell v1 (2026-07-12) — the LEAN (~1KB CSS) house shell for all
+     info docs (briefs, status, guides, PROJECT.html). Fleet conversion rule: reuse this
+     <style> block VERBATIM, structure content with these classes only, change nothing else.
+     Classes: .wrap .sub .note .card .tiles/.tile(.v/.l) .pill(.done/.next/.warn) td.num -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smith_agent repo mode: scoped worktree drafting</title>
+<style>
+:root{--bg:#f9f9f7;--sf:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--mut:#898781;--ln:#e1e0d9;--bd:rgba(11,11,11,.1);--ac:#2a78d6;--ok:#006300;--okbg:rgba(12,163,12,.1);--wn:#b97900}
+@media(prefers-color-scheme:dark){:root{--bg:#0d0d0d;--sf:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--ln:#2c2c2a;--bd:rgba(255,255,255,.1);--ac:#3987e5;--ok:#0ca30c;--okbg:rgba(12,163,12,.14);--wn:#fab219}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;padding:40px 20px 80px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:25px;letter-spacing:-.02em}
+h2{font-size:17px;margin:34px 0 6px}
+.sub,.note{color:var(--ink2);font-size:13.5px;margin:6px 0 12px}
+p,ul,ol{margin:8px 0}ul,ol{padding-left:20px}li{margin:4px 0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:10px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:14px 0}
+.tile{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:12px 14px}
+.tile .v{font-size:24px;font-weight:700}.tile .l{font-size:12.5px;color:var(--ink2)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}
+th{text-align:left;color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px 6px 0;border-bottom:1px solid var(--ln)}
+td{padding:7px 10px 7px 0;border-bottom:1px solid var(--ln);vertical-align:top}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+code,pre{font:12.5px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--ln);border-radius:6px}
+code{padding:1px 5px}pre{padding:12px 14px;overflow-x:auto;margin:10px 0}pre code{background:none;border:none;padding:0}
+a{color:var(--ac)}
+.pill{font-size:11px;font-weight:700;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.pill.done{background:var(--okbg);color:var(--ok)}.pill.next{color:var(--ac);border:1px solid var(--ac)}.pill.warn{color:var(--wn);border:1px solid var(--wn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>smith_agent repo mode: scoped worktree drafting</h1>
+<div class="sub">Built and tested 2026-09-12. Adds a <code>--repo</code> mode to <code>scripts/smith_agent.py</code> so the fleet can draft against a real repository under a declared, mechanically enforced write scope, instead of only in a throwaway sandbox. Borrowed from claude-vibe-squad's task contract and commit-time scope gate; everything else in that project stays unadopted.</div>
+
+<h2>Why this, and why now</h2>
+<p>Today <code>smith_agent.py</code> takes <code>--workdir</code> and treats it as a sandbox. To use the fleet on a real repo, Claude copies files in, copies results out, and re-reads everything, because nothing bounds what the model touched. That re-read is the reason the execution half stays on Claude. Part of that is a correct policy and part of it is just a missing gate.</p>
+<p>A declared write scope plus a settlement gate replaces "Claude re-read all of it" with "the diff is provably inside these paths, and here is the patch". The draft/verify split does not change: the fleet drafts, Claude reads the patch and applies it.</p>
+
+<h2>The load-bearing insight</h2>
+<p>A scope check inside <code>write_file</code> is not a gate. <code>run_command</code> hands the model a bash shell (smith_agent.py line 168). <code>echo x &gt; README.md</code>, <code>sed -i</code>, <code>rm</code>, <code>git checkout</code> all write files without touching <code>write_file</code> at all. Any check at write time is advisory.</p>
+<p>The only sound gate is the net diff, computed at settlement, against a recorded base commit.</p>
+<p>So both, for different jobs:</p>
+<ul>
+<li><strong>Advisory at write time.</strong> <code>write_file</code> refuses out-of-scope paths with an error string the model can read and correct from. Fast feedback, keeps the run productive.</li>
+<li><strong>Authoritative at settle time.</strong> The diff decides. Nothing the model does during the run can move this gate.</li>
+</ul>
+
+<h2>Design</h2>
+
+<h3>New flags</h3>
+<div class="card">
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--repo PATH</code></td>
+<td>Target git repo. Mutually exclusive with <code>--workdir</code>.</td>
+</tr>
+<tr>
+<td><code>--write-scope GLOB</code></td>
+<td>Repeatable. Required in repo mode.</td>
+</tr>
+<tr>
+<td><code>--read-scope GLOB</code></td>
+<td>Repeatable. Advisory only, see below.</td>
+</tr>
+<tr>
+<td><code>--allow-delete</code></td>
+<td>Permit deletions and renames-away in the settled diff. Default: refuse.</td>
+</tr>
+<tr>
+<td><code>--carry-ignored PATH</code></td>
+<td>Repeatable. <code>cp -R</code> a gitignored asset into the worktree.</td>
+</tr>
+<tr>
+<td><code>--contract FILE</code></td>
+<td>Task contract supplying all of the above plus the prompt. Replaces <code>--prompt-file</code>.</td>
+</tr>
+<tr>
+<td><code>--settle MODE</code></td>
+<td><code>patch</code> (default), <code>branch</code>, or <code>none</code>.</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code>--read-scope</code> shapes the brief and filters <code>list_files</code>. It is not a boundary, because <code>run_command</code> can read anything in the worktree. Documented as advisory so nobody later mistakes it for containment.</p>
+
+<h3>The task contract</h3>
+<p>The one format worth borrowing from Vibe Squad. Front matter plus prose body, one file:</p>
+<div class="card">
+<pre><code>---
+model:        glm-5.3
+backend:      openai
+base_url:     https://api.z.ai/api/coding/paas/v4
+api_key_env:  ZAI_API_KEY
+completions_path: /chat/completions
+write_scope:  ["Sources/Engine/**.swift"]
+read_scope:   ["Sources/**", "Tests/**"]
+allow_delete: false
+verify:       "swift test --filter EngineTests"
+tag:          code-edit
+---
+Fix the off-by-one in the loop-point calculation so a loop that ends on the
+final frame does not wrap. Add a test that fails before your change.</code></pre>
+</div>
+<p>The value is that the bound is reviewable before the run and reproducible after it. One file to hand back and forth, and it diffs cleanly when a run gets retried with a tighter scope. Parsed with a ~15 line front-matter reader, no YAML dependency, since the fields are scalars and flat string lists.</p>
+
+<h3>Lifecycle</h3>
+<p><strong>1. Preflight — refuse at launch, not retroactively.</strong></p>
+<ul>
+<li><code>--repo</code> is a git repo; record <code>base = git rev-parse HEAD</code>.</li>
+<li><code>write_scope</code> non-empty. Reject <code>**</code>, <code>*</code>, <code>.git/**</code>, and any glob resolving outside the repo. An unbounded scope is the same as no scope, so it fails rather than silently passing everything.</li>
+<li>Refuse if a worktree already exists at the target path, which is what a crashed earlier run leaves behind.</li>
+<li>A dirty main tree is fine and is not checked. The worktree comes from <code>base</code> and is independent of the working tree.</li>
+</ul>
+
+<p><strong>2. Isolate.</strong></p>
+<p><code>git -C repo worktree add --detach &lt;scratch&gt;/wt-&lt;ts&gt;-&lt;rand&gt; &lt;base&gt;</code>, and <code>--workdir</code> becomes that path. The existing loop runs unchanged. The random suffix matters: a bare timestamp collides when two runs start in the same second, which preflight then refuses as a leftover worktree.</p>
+<div class="note">⚠ <code>--carry-ignored</code> uses <code>cp -R</code>, never a symlink. Symlinking gitignored assets into a worktree once left the <em>source</em> tree holding self-referential symlinks after <code>git worktree remove</code>, with 114M and 478M model directories no longer reachable there. The mechanism was never established, so the rule is behavioral: copy, or do not bring it in.</div>
+
+<p><strong>3. Run.</strong></p>
+<p>Two guards added to the existing tools:</p>
+<ul>
+<li><code>write_file</code> gains the advisory scope check, plus a hard deny on any path under <code>.git</code>. In a linked worktree <code>.git</code> is a <em>file</em> holding the gitdir pointer; overwriting it breaks the worktree in a way that reads as a git bug.</li>
+<li><code>DENY</code> gains <code>git push</code>, <code>git remote</code>, <code>git config --global</code>, and <code>gh </code>. Read-only git stays available, since the model legitimately wants <code>git status</code> and <code>git diff</code>.</li>
+</ul>
+
+<p><strong>4. Settle.</strong></p>
+<pre><code>git -C wt add -A
+git -C wt diff --cached --name-status &lt;base&gt;</code></pre>
+<p>Diffing against the <strong>recorded base</strong>, not against worktree HEAD, is what makes this sound. A model that commits, amends, or checks out cannot hide a change from the gate, because the gate never consults worktree HEAD.</p>
+<p>Then:</p>
+<ul>
+<li>Violations are paths not matching any <code>write_scope</code> glob, plus <code>D</code> and rename-away status when <code>--allow-delete</code> is absent.</li>
+<li>An empty diff is a failure, not a pass: <code>stop = "finish_no_diff"</code>, <code>settled = false</code>. This supersedes the existing <code>did_write</code> flag in repo mode, since <code>did_write</code> only sees <code>write_file</code> and a <code>run_command</code>-only run would otherwise report a false completion. Same principle as the current <code>finish_no_write</code> downgrade, applied to the shell path.</li>
+<li>A clean diff writes <code>&lt;scratch&gt;/wt-&lt;ts&gt;.patch</code> from <code>git diff --cached --binary &lt;base&gt;</code>.</li>
+<li>A dirty diff writes <code>.violations.json</code> and leaves everything in place.</li>
+<li>Build artifacts the <em>verify command itself</em> creates (<code>__pycache__</code>, <code>*.pyc</code>, <code>.pytest_cache</code>, <code>.DS_Store</code>) are unstaged rather than failed, and reported in the summary as <code>artifacts</code>. This was not in the original design and came out of the first end-to-end run: the task tells the model to run pytest, pytest writes <code>__pycache__</code>, and the gate failed an otherwise correct run. Reported rather than dropped, so nothing is hidden.</li>
+<li>A settle reason never masks a loop failure. An HTTP 404 that produced no diff is an error, not "the model changed nothing", so the loop's own stop survives in <code>loop_stop</code> and an errored run is never relabelled <code>finish_no_diff</code>. Also found end-to-end, where a 404 read as a clean no-op run.</li>
+</ul>
+
+<p><strong>5. Teardown.</strong></p>
+<p>Remove the worktree only on a clean pass, and only after the patch is written. On any violation, leave it and print the path, because the whole point is inspecting what went wrong. When <code>--carry-ignored</code> was used, verify the source tree with <code>ls -la</code> before and after removal, never <code>du</code>, which reports 0B for a broken symlink and reads as success.</p>
+
+<h3>Output</h3>
+<p><code>summary</code> JSON and the ledger record both gain <code>settled</code>, <code>base</code>, <code>files[]</code>, <code>violations[]</code>, and <code>patch</code>. <code>stop</code> gains <code>finish_no_diff</code> and <code>scope_violation</code>. The gap report and <code>verdict.py</code> keep working unchanged, since the tag field is untouched.</p>
+
+<h2>What this buys, and what it does not</h2>
+<p><strong>Does:</strong> a mechanical bound on blast radius that Claude can check in one glance instead of re-reading a whole diff; deletions refused by default, consistent with the no-deletion rule; a patch Claude reads and applies rather than a merge that already happened.</p>
+<p><strong>Does not:</strong> contain a hostile model. <code>run_command</code> is a shell, and a model that wanted to escape the worktree could. This bounds carelessness, not malice. The settle gate is the backstop, and it catches the careless case completely.</p>
+
+<h2>Verification plan</h2>
+<p>Lifecycle probes, not a compile. Each is a throwaway "model does X, what must be true" script, and P3 is the one that proves the design is pointed at the right thing.</p>
+<div class="card">
+<table>
+<thead>
+<tr>
+<th>Probe</th>
+<th>Scenario</th>
+<th>Expected</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P1</td>
+<td>In-scope edit</td>
+<td>Settles, patch applies to a clean checkout</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>Out-of-scope write via <code>write_file</code></td>
+<td>Advisory refusal, model self-corrects, run continues</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>Out-of-scope write via <code>run_command</code> (<code>echo x &gt; README.md</code>)</td>
+<td>Passes the write tool, caught at settle</td>
+</tr>
+<tr>
+<td>P4</td>
+<td>Deletion without <code>--allow-delete</code></td>
+<td><code>scope_violation</code>, worktree kept</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>Model commits in the worktree</td>
+<td>Diff vs base shows the true net change</td>
+</tr>
+<tr>
+<td>P6</td>
+<td>Model does nothing</td>
+<td><code>finish_no_diff</code>, <code>settled: false</code></td>
+</tr>
+<tr>
+<td>P7</td>
+<td>Crashed run left a worktree</td>
+<td>Preflight refuses, prints the cleanup command</td>
+</tr>
+<tr>
+<td>P8</td>
+<td><code>--carry-ignored</code> asset, then teardown</td>
+<td>Source tree intact, verified by <code>ls -la</code></td>
+</tr>
+<tr>
+<td>P9</td>
+<td>Backend returns HTTP 404</td>
+<td>Error survives settle, not relabelled as a no-op</td>
+</tr>
+<tr>
+<td>P10</td>
+<td>Verify command writes <code>__pycache__</code></td>
+<td>Run settles; artifacts reported, out of the patch</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>P3, P5 and P6 pin the three ways a naive implementation would silently pass. P9 and P10 were added after the end-to-end run found both live.</p>
+<p>Each guard is mutation-tested: settling against worktree HEAD instead of the base fails only P5, dropping the scope check fails only P3, treating an empty diff as a pass fails only P6, and removing the error guard fails only P9. A probe that cannot fail is not a check, and this is what proves these can.</p>
+
+<h2>Status</h2>
+<p>Built, ~230 lines, pure stdlib, no new dependencies, no change to the tool loop itself. <code>--carry-ignored</code> and <code>--settle branch</code> landed with the rest rather than later.</p>
+<p><code>scripts/test_repo_mode.py</code> runs 45 checks with no model calls. The existing suite (<code>test_batch_empty</code>, <code>test_preflight</code>, <code>test_route_label</code>, <code>test_think_flag</code>) still passes, so sandbox mode is unchanged.</p>
+<p>Two latent bugs were fixed on the way: the module's scope globals were never reset between <code>main()</code> calls, so a second run in one process inherited the previous run's scope; and worktree names collided within a second.</p>
+<p>End-to-end on z.ai <code>glm-5.3</code>: an off-by-one fix in 5 turns and 22s, a minimal one-line patch that applied clean with both tests passing, no out-of-scope writes. Logged to the ledger and verdicted <span class="pill done">good</span> under <span class="pill">code-edit</span>.</p>
+<p>That run also found a stale line in SKILL.md: the documented z.ai invocation omits <code>--completions-path /chat/completions</code>, and the default <code>/v1/chat/completions</code> 404s against the Coding Plan endpoint. Fixed in SKILL.md.</p>
+</div>
+</body>
+</html>

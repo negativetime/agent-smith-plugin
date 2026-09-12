@@ -425,7 +425,11 @@ is a documented DEFAULT PRACTICE, not something the tool enforces — reach for 
 # agentic tasks, flat-rate subscription (marginal cost $0). Needs ZAI_API_KEY.
 python3 "$SKILL/scripts/smith_agent.py" --backend openai \
   --base-url https://api.z.ai/api/coding/paas/v4 --model glm-5.3 \
-  --api-key-env ZAI_API_KEY --workdir /path/to/SCRATCH --prompt-file task.txt
+  --api-key-env ZAI_API_KEY --completions-path /chat/completions \
+  --workdir /path/to/SCRATCH --prompt-file task.txt
+# --completions-path IS REQUIRED here: the default is /v1/chat/completions and z.ai's
+# Coding Plan endpoint has no /v1 segment, so without it every call 404s on
+# /v4/v1/chat/completions (measured 2026-09-12; the flag was missing from this example).
 
 # local/private fallback (free, no data leaves the machine):
 python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
@@ -434,7 +438,61 @@ python3 "$SKILL/scripts/smith_agent.py" --model gpt-oss:20b \
 # cloud escalation: --backend gemini --model pro (5x slower, 503 risk)
 ```
 
-Rules: SCRATCH dirs only (it executes model shell — never a live repo); write the task like
+### Repo mode — `--repo` (a real repo, under a declared write scope)
+
+Added 2026-09-12. Runs the same loop in a **disposable git worktree** taken from HEAD, and
+settles to a **patch** you apply yourself. Borrowed from claude-vibe-squad's task contract
+and commit-time scope gate.
+
+```bash
+python3 "$SKILL/scripts/smith_agent.py" --repo ~/Developer/Foo --contract task.md
+# or without a contract:
+#   --repo ~/Developer/Foo --write-scope 'Sources/Engine/**' --prompt-file task.txt
+```
+
+A contract is front matter plus the task prose, so the bound is reviewable before the run:
+
+```
+---
+model:        glm-5.3
+backend:      openai
+base_url:     https://api.z.ai/api/coding/paas/v4
+api_key_env:  ZAI_API_KEY
+completions_path: /chat/completions
+write_scope:  ["src/**"]
+verify:       "python3 -m pytest -q"
+tag:          code-edit
+---
+<the task, written like a ticket>
+```
+
+**Why the gate is at settlement, not at write_file.** `run_command` hands the model a
+shell, so `echo x > README.md` never touches `write_file`. The scope check inside
+`write_file` is ADVISORY (fast feedback so the model self-corrects); the authoritative gate
+is the diff, taken against the **recorded base commit**, never against worktree HEAD — so a
+model that commits or amends cannot hide a change from it. This bounds carelessness, not
+malice: a model that wanted out of the worktree could get out.
+
+- Refused **at launch**: no `--write-scope`, an unbounded scope (`**`, `*`), `.git`, a
+  leftover worktree from a crashed run.
+- Refused **at settlement**: any path outside the scope; any deletion without
+  `--allow-delete`; an empty diff (`finish_no_diff` — `did_write` only sees `write_file`,
+  so a run_command-only session would otherwise report a false completion).
+- On a violation the worktree is **kept** plus a `.violations.json`, so it can be inspected.
+- Build artifacts the verify command itself creates (`__pycache__`, `*.pyc`,
+  `.pytest_cache`, `.DS_Store`) are unstaged rather than failed, and **reported** as
+  `artifacts` in the summary. Nothing is silently dropped.
+- `--carry-ignored PATH` does `cp -R`, never a symlink: symlinking gitignored assets into a
+  worktree once left the SOURCE tree holding self-referential symlinks after
+  `git worktree remove`. Teardown re-checks the source with `ls -la` (never `du`, which
+  reports 0B for a broken link).
+
+Probes: `python3 -B scripts/test_repo_mode.py` (45 checks, no model calls). Mutation-tested
+— removing the base-diff, the scope check, the empty-diff rule or the error guard each
+fails exactly its own probe.
+
+Rules: for a sandbox (`--workdir`) it is SCRATCH dirs only (it executes model shell); use
+`--repo` for a live repo, and still read the patch before applying it. Write the task like
 a ticket (spec, exact outputs, how to verify); seed a `test_public.py`; **verify the result
 yourself**, then verdict it. Canonical source + harness: `~/Developer/agent-gym/`.
 
