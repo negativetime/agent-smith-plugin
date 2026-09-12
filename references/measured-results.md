@@ -137,3 +137,19 @@ Default witness = gpt-oss:20b; agents-a1 is the premium alternative (decorrelate
 Groq VERIFIED LIVE with `openai/gpt-oss-120b` (free tier, extreme speed) via
 `--backend openai --base-url groq`; needs GROQ_API_KEY; Cloudflare 403s bare urllib
 (fixed: real User-Agent). hf-xet download bug workaround: `HF_HUB_DISABLE_XET=1`.
+
+## doc-format: gemini-pro dropped a paragraph at temp 0 — 2026-09-12
+
+Converting the repo-mode spec (8.7 KB markdown) with playbook 5's exact prompt at
+`--temperature 0`, `gemini-pro-latest` silently dropped an entire paragraph (the "Two latent
+bugs were fixed on the way..." block) from the Status section while reproducing everything
+around it correctly. `scripts/parity.py` caught it; a skim would not have.
+
+This is the same shape the playbook attributes to gpt-oss:20b ("temp 0 stopped the
+sentence-dropping; it did not stop proper-noun corruption") — now measured on the route the
+playbook calls primary. The doc-format tally moves to gemini-pro 2 good / 1 bad.
+
+**Does not change the routing** (pro is still the best measured doc-format route), but it
+does confirm the parity check is load-bearing rather than belt-and-braces: run
+`parity.py draft.md out.html` on EVERY doc conversion, whatever the route, and repair the
+page rather than re-rolling — a second generation drops something different.
