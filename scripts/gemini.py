@@ -34,7 +34,10 @@ import urllib.request
 
 BASE = "https://generativelanguage.googleapis.com"
 INLINE_LIMIT = 15 * 1024 * 1024  # files larger than this go through the Files API
-SEARCH_MIN_TOKENS = 8000  # floor for z.ai grounded search; see call_openai_compat
+SEARCH_MIN_TOKENS = 32000  # floor for z.ai grounded search; see call_openai_compat
+# 2026-09-12 — raised 8000 -> 32000: three --tag research runs (the z.ai default route)
+# returned EMPTY content at 8000, each spending 28-35k chars in reasoning_content with
+# finish_reason=length. Same failure class as the 09-05 paid-tag floors; a ceiling costs nothing.
 
 # Friendly aliases. Pass any real model name through unchanged.
 ALIASES = {
