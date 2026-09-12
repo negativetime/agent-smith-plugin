@@ -487,6 +487,9 @@ malice: a model that wanted out of the worktree could get out.
   `git worktree remove`. Teardown re-checks the source with `ls -la` (never `du`, which
   reports 0B for a broken link).
 
+Worktrees and settled patches land in `data/worktrees/` (gitignored); override with
+`SMITH_WORKTREES`.
+
 Probes: `python3 -B scripts/test_repo_mode.py` (45 checks, no model calls). Mutation-tested
 — removing the base-diff, the scope check, the empty-diff rule or the error guard each
 fails exactly its own probe.
