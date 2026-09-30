@@ -34,7 +34,7 @@ def main():
                          "queue WITHOUT polluting the routing weights.")
     ap.add_argument("note", nargs="?", default="", help="why (required for bad)")
     ap.add_argument("--model", help="target the most recent run of this model")
-    ap.add_argument("--script", choices=["gemini", "smith_agent", "transcribe"],
+    ap.add_argument("--script", choices=["gemini", "smith_agent", "transcribe", "jev"],
                     help="target the most recent run of this script")
     ap.add_argument("--ts", help="target the run with this exact ts")
     ap.add_argument("--tag", help="task-shape label for routing weights "

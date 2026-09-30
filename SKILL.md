@@ -148,8 +148,9 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 - **DESIGN lane RE-GATED 2026-08-16 — `gpt-oss:20b` takes it (20.0/24 blinded).** 4-way
   re-gate after gemma4 left: gemini-pro 22.5 · **gpt-oss:20b 20.0** · qwen3-coder:30b 15.0 ·
   gemini-flash incomplete (503). So local design work goes to `gpt-oss:20b`, **not**
-  `qwen3-coder:30b`, which is weak here (dead branches, falsely-documented exceptions, a
-  printed success message for work it never did) — it holds the SPEED lane, not this one.
+  `qwen3-coder:30b`, which was weak here (dead branches, falsely-documented exceptions, a
+  printed success message for work it never did). ⚠ It held the SPEED lane; those weights
+  were REMOVED 2026-09-22 and that lane is now vacant (below).
   ⚠ Known, REPLICATED defect: gpt-oss:20b writes *int-only `consume` on a float bucket* in
   rate-limiter-shaped code — same flaw as 07-04, six weeks apart. Review numeric-boundary
   code from it. ⚠ `--tag design` still defaults to **flash**, deliberately: flash TIED pro
@@ -164,7 +165,12 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
   first or double-read.** Use for "which screen / did the dialog open / read this field":
   `--backend ollama --model qwen3-vl:4b --file shot.png`. gemma4:26b keeps the
   quality/design crown.
-- **Fast bulk drafts:** `qwen3-coder:30b` (18 GB) — ollama default; 2–8s one-shots.
+- **Fast bulk drafts: `qwen3-coder:30b` REMOVED 2026-09-22** (18 GB reclaimed, Josh's call —
+  unused since 2026-09-09, and the disk was needed for the Bibliome bundled-model bake-off).
+  It was the ollama default and the 2–8s one-shot lane. **The SPEED lane is now vacant**; no
+  local model has earned it. `gemini.py`'s bare-ollama default now resolves to `gpt-oss:20b`
+  (slower, but TRUSTED and already resident for the claude-mem observer). Re-pull and
+  re-gate before routing to the 30b again: `ollama pull qwen3-coder:30b`.
 - **Long private digests — NEW LANE (validated 2026-07-12):** `gpt-oss:20b` at up to
   **131k context** — RAM stays flat at 12 GB (MXFP4 MoE), 3/3 needle recall + correct
   comprehension measured at 52k tokens (~4.6 min). `gemini.py` now auto-sizes `num_ctx`
@@ -180,10 +186,10 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 - **Cloud model choice:** `flash` for bulk text; **`pro` for code/design/research synthesis**
   and as escalation when local attempts fail.
 - **Residency (36 GB Mac, since the claude-mem observer went local 2026-07-12):** the observer
-  keeps `gpt-oss:20b` (12 GB) hot most of the day, and it + `qwen3-coder:30b` (18 GB) can't
-  co-reside in GPU memory — routine one-shots on the 26b/30b now pay a 20–60s swap and evict
-  the observer's model. Prefer `--model gpt-oss:20b` for routine local drafts; reach for
-  gemma4:26b (vision) / qwen3-coder:30b deliberately and expect the swap. If Ollama wedges
+  keeps `gpt-oss:20b` (12 GB) hot most of the day. The residency conflict that motivated this
+  paragraph is GONE as of 2026-09-22: gemma4:26b (08-16) and qwen3-coder:30b (09-22) are both
+  removed, so nothing local competes with the observer for GPU memory any more. Local text is
+  `gpt-oss:20b`, vision is `qwen3-vl:4b` (3.3 GB, co-resides). If Ollama wedges
   (model stuck "Stopping...", requests hang): `kill` the `llama-server` runner PID, or
   restart Ollama.app.
 - Always: **the model drafts, you verify** — every winner has shipped a bug a review caught.
@@ -255,8 +261,10 @@ as insurance, not spend. The table's model string also moved `glm-5.2` → `glm-
 retired 5.2 in place on 2026-08-14, so the old string had been silently running 5.3 while
 logging the wrong name into the ledger.
 
-`--backend ollama --model qwen3-coder:30b` (or `gemma4:26b`) still works as an explicit
-override for `code-draft` — local stays free/private, just no longer the silent default.
+`--backend ollama --model gpt-oss:20b` is the explicit local override for `code-draft` —
+local stays free/private, just no longer the silent default. ⚠ The `qwen3-coder:30b` and
+`gemma4:26b` overrides named here until 2026-09-22 are both REMOVED; pulling them back is a
+download, not a flag.
 
 Any remaining tag with neither a `DEFAULT_PAID_FOR_TAG` nor `DEFAULT_LOCAL_FOR_TAG` entry
 still defaults to the Gemini API — their evidence isn't strong enough yet to force a
@@ -288,8 +296,8 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
 - **Mechanical code boilerplate from a clear spec** (Codable conformance, enum plumbing,
   UI-label tables, test scaffolds) → bare `--tag code-draft` now defaults to the z.ai GLM
   Coding Plan (`glm-5.3`, see the DEFAULT-TO-PAID section above) — gym-swept 27/27
-  2026-07-28, no residency swap. `--backend ollama --model qwen3-coder:30b` (or
-  `gemma4:26b`) still available as an explicit local/private override.
+  2026-07-28, no residency swap. `--backend ollama --model gpt-oss:20b` is the local/private
+  override (qwen3-coder:30b and gemma4:26b are REMOVED as of 2026-09-22).
 - **Classification / tag / label batches** → `llama3.2:3b` (`--tag classify`; 1g/0b),
   `--consensus gpt-oss:20b` when accuracy matters.
 - **Web research** → `--search --tag research`. `gemini.py` now defaults `--tag research`
@@ -310,9 +318,28 @@ ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
   monthly cap blows — `gemini.py` now reroutes automatically on a cap-shaped 429 and
   prints an UNVERIFIED banner; re-verify every version and date it returns.
   `SMITH_NO_FALLBACK=1` disables the reroute. Transient 429s are NOT treated as caps.
-- **Route BLOCK:** `doc-format @ gpt-oss:20b` is 0g/**3b** — do not send doc-format there
-  until it passes an agent-gym task. Use gemini-pro (5-streak, LIGHT REVIEW — first earned
-  tier), or gemma4:26b / qwen3-coder:30b (2g/0b each).
+- **Route BLOCK:** `doc-format @ gpt-oss:20b` is 0g/**3b** — do not send doc-format there.
+  Confirmed by the gym, not just the ledger: it goes **13/16 on `doc_fidelity_html_long`**,
+  i.e. it fails ~1 run in 5 with the silent `Balancer`→`Baler` proper-noun corruption.
+- **doc-format has NO LOCAL route as of 2026-09-22** — its only two qualified models
+  (gemma4:26b 08-16, qwen3-coder:30b 09-22) are both removed and the one remaining local
+  text model is the blocked one. It was dropped from `DEFAULT_LOCAL_FOR_TAG`.
+- **doc-format now routes to z.ai `glm-5.3` (`DEFAULT_PAID_FOR_TAG`, 2026-09-22).** Gated
+  before adding, per this file's own rule: **28/28** across `doc_fidelity_html`,
+  `doc_fidelity_html_long` and `doc_shell_verbatim`, including **10/10 on the long task**
+  that catches gpt-oss:20b (13/16) and sinks nemotron-3.5-lightning-30b (0/4).
+  ⚠ **This is a COST decision, not a quality upgrade — do not misread it.** In the GYM z.ai is
+  the better-sampled arm (28 runs vs gemini-pro's 2). In the LEDGER it is the opposite:
+  `doc-format @ gemini-pro-latest` is **23 good / 1 bad, 96%, streak 9 (light review)** on real
+  production work, where z.ai has gym evidence and barely any production verdicts. So
+  gemini-pro remains the better-EVIDENCED route; z.ai wins because it is flat-rate already-paid
+  while gemini-pro spends the rate-limited free API tier. Revert to gemini-pro on the first bad
+  verdict, and verdict z.ai's doc-format runs until it builds a comparable production record.
+  ⚠ Also worth recording: the route removed on 2026-09-22 was NOT marginal —
+  `doc-format @ qwen3-coder:30b` was **21 good / 1 bad, 95%, streak 8**. SKILL.md's old "2g/0b"
+  figure badly understated it. Re-pulling it is a real option if z.ai disappoints.
+  ⚠ Median `bloat_ratio` 1.49x vs gemini-pro's 1.32x. That metric is output-vs-reference
+  LENGTH, not proof of invention, but keep diffing proper nouns and figures against the draft.
 
 ## Gemini is no longer the default for bulk — 2026-09-05
 
@@ -651,6 +678,27 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   returns **HTTP 429 "Insufficient balance or no resource package"**. Only
   `glm-4.5-flash` (not in the list) actually answers. The widely-repeated "300M free
   tokens/day for GLM-5.2" did **not** hold on a real key — GLM-5.2 needs a paid balance.
+- **Classification/decisions — `scripts/jev.py` (NEW 2026-09-30).** Jev (`typesafe/jev-1.13`
+  on OpenRouter's alpha Decisions API) is NOT a chat model — it answers predefined yes/no
+  (`noul`), multiple-choice (`choice`), or scored (`score`) questions about a piece of text
+  and returns calibrated probabilities, nothing else. No free text, no code — wrong tool for
+  that, use `gemini.py`. Right tool whenever a task is a JUDGMENT CALL, not a generation:
+  routing, a good/bad-shaped verdict, "is this really a duplicate," picking among a fixed
+  set of options. Needs `OPENROUTER_API_KEY` (already in `~/.zshrc`). Cheap — measured
+  $0.000062/doc classifying real PDF content against a 35-way taxonomy (Bibliome misfiling
+  pilot, `jev-openrouter-decisions-api` memory note has the full writeup).
+  ```bash
+  # shorthand: one question (--noul/--choice/--score), name is always "answer"
+  python3 "$SKILL/scripts/jev.py" --tag classify --state "some text" \
+      --noul "Is this a bug report?" --true "Describes broken behavior." --false "A question."
+  # general form: several questions about the same text, in ONE call
+  python3 "$SKILL/scripts/jev.py" --tag classify --state "some text" \
+      --questions-file questions.json
+  ```
+  Full JSON response (answers, probabilities, `usage.cost`) on stdout; a one-line summary
+  and the real cost on stderr. Logged to the same usage ledger as every other script here
+  (`"script": "jev"`, now a valid `verdict.py --script` target) — `--tag` is required.
+  Probes: `python3 -B "$SKILL/scripts/test_jev.py"` (10 checks, pure stdlib, no model calls).
 - **Reasoning models return an EMPTY answer on too small a budget** — success-shaped
   failure. `glm-4.5-flash` spends the budget on a hidden `reasoning_content` channel
   before writing `content`: at `--max-tokens 120` it returned HTTP 200 with **zero**
