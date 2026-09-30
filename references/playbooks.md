@@ -162,7 +162,13 @@ hand-rolled version is wrong in a way that reads as correct (see its docstring).
 when the page's text runs >1.15x the draft, since parity alone cannot see INVENTED content —
 every draft unit can be present in a page that also made things up.
 
-**temp 0 is necessary but NOT sufficient — prefer gemma4:26b or qwen3-coder:30b locally.**
+**temp 0 is necessary but NOT sufficient — and as of 2026-09-22 there is NO local route left
+for this playbook.** Both models that passed it have been removed (gemma4:26b 08-16,
+qwen3-coder:30b 09-22), and the one remaining local text model is the one measured to FAIL it.
+**The route is now z.ai `glm-5.3`** (bare `--tag doc-format` goes there automatically): gym-gated
+2026-09-22 at 28/28 across the doc suite, 10/10 on `doc_fidelity_html_long` — this exact task,
+the one gpt-oss:20b fails 3 times in 16. Cloud `pro` is the fallback. Do NOT substitute
+gpt-oss:20b because it is what is installed locally — that is the exact failure below.
 The agent-gym `doc_fidelity_html_long` task (added 2026-07-18) runs at `--temperature 0` and
 gpt-oss:20b still silently rewrote a heading, `Balancer` → `Baler`, while keeping
 `BalancerUnit` correct in the body of the same section — the same shape as the
@@ -170,7 +176,9 @@ gpt-oss:20b still silently rewrote a heading, `Balancer` → `Baler`, while keep
 not stop proper-noun corruption. On that task **gemma4:26b and qwen3-coder:30b both passed
 and gpt-oss:20b failed**, and the ledger agrees (doc tags: gpt-oss:20b 1 good / 3 bad,
 gemini-pro 2 good / 0 bad, flash 1 good / 0 bad). So: cloud `pro` stays the primary route,
-and the local fallback should be **gemma4:26b or qwen3-coder:30b, not gpt-oss:20b**. Whatever
+and the local fallback was **gemma4:26b or qwen3-coder:30b, not gpt-oss:20b** — both now
+removed, so there is no local fallback at all; re-pull and re-gate one before claiming there is.
+Whatever
 the route, diff proper nouns and figures against the draft before shipping — this failure is
 specifically designed to survive a skim.
 

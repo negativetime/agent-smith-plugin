@@ -65,7 +65,12 @@ DEFAULT_MODEL_BY_TAG = {
 # + SKILL.md gym-trust notes as of 2026-07-27. Add a tag here only once it has a real
 # good/bad split backing it — this is a routing fix, not a place to guess.
 DEFAULT_LOCAL_FOR_TAG = {
-    "doc-format": "qwen3-coder:30b",       # 2g/0b (gpt-oss:20b is BLOCKED here, 0g/3b — don't use it)
+    # doc-format REMOVED from this table 2026-09-22: qwen3-coder:30b was its last local
+    # route and the weights are gone (Josh, unused since 2026-09-09). gpt-oss:20b is a
+    # measured Route BLOCK here (0g/3b) and gemma4:26b went 2026-08-16, so there is no
+    # local model left to point at. Falling through to the Gemini default is CORRECT,
+    # not a regression: gemini-pro is doc-format's earned route (5-streak, LIGHT REVIEW).
+    # Re-add a local entry only after one passes an agent-gym doc-format task.
     "classify": "llama3.2:3b",             # 1g/0b
     "vision-prescreen": "qwen3-vl:4b",     # 3g/0b, TRUSTED
     # 2026-08-06: bad verdict on a 38-hunk diff-review batch — 4 of the largest diffs
@@ -135,6 +140,20 @@ DEFAULT_PAID_FOR_TAG = {
     "long-digest": {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
     "translate":   {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
     "copy-draft":  {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
+    # doc-format ADDED 2026-09-22, replacing the local route that died with qwen3-coder:30b.
+    # Measured, not assumed — agent-gym, this date: zai-glm-5.3 is **28/28** across
+    # doc_fidelity_html + doc_fidelity_html_long + doc_shell_verbatim, including **10/10 on
+    # doc_fidelity_html_long**, which is the DISCRIMINATING task: it is where gpt-oss:20b
+    # (the 0g/3b Route BLOCK) fails 3 of 16 with the silent Balancer->Baler proper-noun
+    # corruption, and where nemotron-3.5-lightning-30b goes 0/4. gemini-pro passes it too
+    # but only at n=2, so z.ai is now the better-SAMPLED route, not merely the cheaper one.
+    # Three real production doc-format runs (2026-09-08 x2, 09-13) were also re-inspected:
+    # complete, well-formed, non-truncated self-contained HTML, no empty-content failures.
+    # ⚠ Median bloat_ratio 1.49x vs gemini-pro's 1.32x — above the playbook's 1.15x parity
+    # warning. bloat_ratio is output-vs-reference LENGTH, not evidence of invention, but the
+    # standing rule still applies: diff proper nouns and figures against the draft before
+    # shipping. Revert to gemini-pro on the first bad verdict.
+    "doc-format":  {"model": "glm-5.3", "base_url": _ZAI_CODING, "min_max_tokens": 32000},
 }
 
 # --- SoundCheck egress guard (2026-09-05) ---------------------------------------
@@ -660,7 +679,7 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None, thi
     think: None leaves the model's default; True/False or a level is sent as Ollama's `think`
     field. Added 2026-09-11 for deepseek-v4.1-flash, whose thinking loops forever at
     temperature 0 on a dense spec and which passes the same spec in 1.1s with it off."""
-    model = model or os.environ.get("OLLAMA_MODEL") or "qwen3-coder:30b"
+    model = model or os.environ.get("OLLAMA_MODEL") or "gpt-oss:20b"
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
@@ -1312,8 +1331,11 @@ def _witness(prompt, system, primary_model, primary_text, images, context):
             return  # only short structured outputs compare meaningfully
         wmodel = os.environ.get("SMITH_WITNESS_MODEL", "gpt-oss:20b")
         if wmodel == primary_model:
-            # gemma4:26b was the alternate witness until its weights were removed 2026-08-16.
-            wmodel = ("qwen3-coder:30b" if primary_model != "qwen3-coder:30b"
+            # The alternate witness has to be a model that is actually installed.
+            # gemma4:26b went 2026-08-16 and qwen3-coder:30b went 2026-09-22; llama3.1:8b
+            # is the remaining decorrelated general-text local (qwen3-vl is vision,
+            # llama3.2:3b is the tiny floor).
+            wmodel = ("llama3.1:8b" if primary_model != "llama3.1:8b"
                       else "gpt-oss:20b")
         wtext = call_ollama(prompt, system, 0.0, wmodel, None)
         agree = _outputs_agree(primary_text, wtext)
@@ -1547,7 +1569,7 @@ def run_batch(args, prompt):
                 "--backend ollama --model qwen3-vl:4b; the openai lane here is text-only.")
             sys.exit(2)
     else:
-        model = args.model or ("qwen3-vl:4b" if any_img else "qwen3-coder:30b")
+        model = args.model or ("qwen3-vl:4b" if any_img else "gpt-oss:20b")
     consensus = args.consensus
     temperature = args.temperature
     if consensus:
@@ -1695,7 +1717,7 @@ def main():
                          "e.g. https://api.groq.com/openai/v1 or http://localhost:11434/v1")
     ap.add_argument("--model", default=None,
                     help="gemini: flash|pro|flash-lite|<name> (default flash). "
-                         "ollama: model tag (default qwen3-coder:30b). gemini-cli: full CLI model name "
+                         "ollama: model tag (default gpt-oss:20b). gemini-cli: full CLI model name "
                          "or omit for the CLI's default. Ignored for fm.")
     ap.add_argument("--system", help="System instruction (role/style/constraints).")
     ap.add_argument("--file", action="append", default=[], metavar="PATH",
@@ -1904,7 +1926,7 @@ def main():
             # vision needs a vision model: auto-pick qwen3-vl:4b when images are present
             # (was gemma4:26b until 2026-08-16 — weights removed; and the vision-v1 suite
             # scored qwen3-vl:4b 100% vs gemma4's 80% with 4 invented fields anyway)
-            model_eff = args.model or ("qwen3-vl:4b" if images else "qwen3-coder:30b")
+            model_eff = args.model or ("qwen3-vl:4b" if images else "gpt-oss:20b")
         elif args.backend == "openai":
             model_eff = args.model or "unset"
         else:

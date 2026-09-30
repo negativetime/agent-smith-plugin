@@ -1,9 +1,9 @@
 {
- "gemma4:26b": "5571076f3d70",
+ "deepseek-v4.1-flash:cloud": "e04da138d31e",
+ "glm-5.2:cloud": "09d3ded00dd7",
  "gpt-oss:20b": "17052f91a42e",
+ "llama3.1:8b": "46e0c10c039e",
  "llama3.2:3b": "a80c4f17acd5",
- "nomic-embed-text:latest": "0a109f422b47",
- "qwen2.5-coder-smith:14b": "61650e6dbf73",
- "qwen3-coder:30b": "06c1097efce0",
+ "llama3.2:3b-obs": "6bb1c1002d3a",
  "qwen3-vl:4b": "1343d82ebee3"
 }

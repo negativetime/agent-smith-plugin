@@ -10,7 +10,7 @@ Every request/response is appended to a transcript JSONL — successful transcri
 are future fine-tuning data (see PROGRAM.md §5).
 
 Usage:
-    python3 agent_loop.py --model qwen3-coder:30b --workdir /path/to/sandbox \
+    python3 agent_loop.py --model gpt-oss:20b --workdir /path/to/sandbox \
         --prompt-file task.txt [--max-turns 25] [--num-ctx 32768] \
         [--transcript /path/to/transcript.jsonl]
 
