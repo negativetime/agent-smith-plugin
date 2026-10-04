@@ -273,6 +273,9 @@ different route silently.
 Reach for these WITHOUT re-deriving the gap report; each is a measured gap joined with a
 ledger-trusted (or trial-ready) route. Tag every run so the streak builds.
 
+- **Read-only repo questions (what a Claude Explore subagent does)** → `smith_agent.py
+  --explore DIR --question "…"`, or `--fanout q.txt -j 4` for several at once. See "Explore
+  mode" under smith_agent below. 5/5 correct on its first live trial, 2026-10-03.
 - **Read-only fan-out / grep-and-summarize sweeps** → `--backend ollama --batch`
   (`--tag subagent-fanout` — must match `gap_report.py`'s `SHAPES` tag exactly, or the run
   is invisible to the gap report; `fanout-digest` was a stale/wrong tag name here until
@@ -525,6 +528,49 @@ Rules: for a sandbox (`--workdir`) it is SCRATCH dirs only (it executes model sh
 `--repo` for a live repo, and still read the patch before applying it. Write the task like
 a ticket (spec, exact outputs, how to verify); seed a `test_public.py`; **verify the result
 yourself**, then verdict it. Canonical source + harness: `~/Developer/agent-gym/`.
+
+### Explore mode: `--explore` + `--fanout` (the fleet's Explore subagent), 2026-10-03
+
+Use this INSTEAD of a Claude `Explore` / read-only `general-purpose` Agent call for a repo
+question: where is X, how does Y work, list every Z. The fleet agent gets its own tools
+(`list_files`, `grep`, line-numbered `read_file`, `finish(report)`), with **no write or shell
+tool**, and works on the real directory. Nothing is copied and nothing can change.
+
+```bash
+# one question (report is printed to stderr and archived under data/outputs/)
+python3 "$SKILL/scripts/smith_agent.py" --explore ~/Developer/Foo \
+  --question "Where is the sync conflict resolved? Cite file:line." < /dev/null
+# several independent questions in parallel: one file, separated by lines of ---
+python3 "$SKILL/scripts/smith_agent.py" --explore ~/Developer/Foo --fanout q.txt -j 4 < /dev/null
+# -> <out-dir>/fanout.md (all answers), plus qNN-*.md, *.jsonl transcripts, a JSON summary
+```
+
+- **Default route is z.ai glm-5.3** (flat-rate Coding Plan) when `--model`/`--backend` are
+  omitted; tag defaults to `subagent-fanout`. `-j` defaults to 4 and is capped at 5 on z.ai
+  (it 429s past ~6 in flight; the client retries 429s with backoff). Local ollama defaults to
+  `-j 1`. A metered route (Gemini API, Ollama `:cloud`) refuses to fan out without `--allow-metered`.
+- **Every answer cites `path:line`, and the tool checks each citation** against the real file
+  (`cites: N valid / M invalid`, with examples of the bad ones in `fanout.md`). That catches
+  invented files and lines. It cannot catch a wrong reading of a real line, so still re-check
+  the citations your next step depends on.
+- **A question is `ok` only if its report file exists and is non-empty.** An empty `finish`
+  is `finish_empty_report`, a failure. Any failure makes the fan-out exit 1.
+- Out of turns, the agent gets one last-call turn to hand in what it has (`stop=*_last_call`).
+  A substantive prose answer with no `finish` call is accepted (`stop=no_tools`).
+- Each agent writes its own ledger row (`output_file`, `cites`, `fanout` id, a microsecond
+  `ts`), so verdict each one: `verdict.py good|bad "why" --ts <ts from fanout.md> --tag
+  subagent-fanout`. ⚠ Parallel children finish in the same second; second-resolution `ts`
+  made three runs share one verdict key until this was fixed.
+- **First live trial (2026-10-03):** 5 questions about this skill's own scripts, `-j 4`,
+  **62 s wall, 5/5 correct** against a grep answer key, **52/52 citations valid**; 18 to 48 s
+  each, 3 to 7 turns. Easy single-file lookups mostly; broader "trace this flow" questions are
+  still unmeasured, so verify those harder.
+- Keep using Claude's Agent tool when the job needs edits, a shell, judgment, or a chain of
+  dependent steps. `gemini.py --batch` is still the tool for *one prompt over a known file list*.
+
+Probes: `python3 -B scripts/test_explore.py` (42 checks, a fake OpenAI server, no model
+calls). Mutation-tested: dropping the stale-index check, the write refusal, or the
+empty-report rule each fails its own probe.
 
 ## Local transcription — transcribe.py (audio → text, free, private)
 

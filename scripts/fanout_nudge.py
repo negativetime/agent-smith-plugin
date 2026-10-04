@@ -120,14 +120,17 @@ def main():
 
     msg = (
         f"[agent-smith] Agent dispatch #{n} this session ({description or 'read-only fan-out'}). "
-        f"If this is read-only (search/summarize/digest, no edits), it has a measured fleet route "
-        f"that costs no Claude tokens:\n"
-        f"  python3 ~/.claude/skills/agent-smith/scripts/gemini.py --tag subagent-fanout \"<prompt>\"\n"
-        f"  (free local gpt-oss:20b by default; or --model glm-5.2 --base-url zai-coding for the paid "
-        f"flat-rate lane)\n"
-        f"For several similar lookups at once, use --batch. Verify load-bearing output, then "
-        f"verdict.py good|bad --tag subagent-fanout. Ignore this if the task needs Claude's judgment "
-        f"or full tool access — it's a nudge, not a rule."
+        f"If this is a read-only repo question (find / trace / summarize, no edits), the fleet "
+        f"can run it as an explore agent with its own grep/read tools, at no Claude-token cost:\n"
+        f"  python3 ~/.claude/skills/agent-smith/scripts/smith_agent.py --explore <dir> "
+        f"--question \"<prompt>\" < /dev/null\n"
+        f"Several independent questions: one file, separated by '---' lines, run in parallel "
+        f"into one fanout.md:\n"
+        f"  ... --explore <dir> --fanout questions.txt -j 4 < /dev/null\n"
+        f"Defaults to flat-rate z.ai glm-5.3. Every answer cites path:line and reports how many "
+        f"citations resolved; re-check the load-bearing ones, then verdict.py good|bad "
+        f"--tag subagent-fanout --script smith_agent. Ignore this if the task needs Claude's "
+        f"judgment or edits; it's a nudge, not a rule."
     )
     print(json.dumps({
         "hookSpecificOutput": {

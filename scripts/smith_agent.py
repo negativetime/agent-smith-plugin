@@ -20,8 +20,20 @@ Prints a one-line JSON summary to stdout at the end:
 `finished` is only true if a write_file actually succeeded this session — a
 finish/no_tools stop with zero writes is downgraded to *_no_write and NOT counted
 as finished (models can talk themselves into "done" without changing anything).
+
+Explore mode (read-only, the fleet's stand-in for a Claude Explore subagent):
+    python3 smith_agent.py --explore /path/to/repo --prompt-file question.txt
+    python3 smith_agent.py --explore /path/to/repo --fanout questions.txt [-j 4]
+The model gets list_files / read_file (line-numbered) / grep / finish(report) and NO
+write or shell tool. `finished` means a non-empty report came back; its file:line
+citations are checked against the real files (`cites`). --fanout runs one explore
+agent per question in parallel subprocesses and writes one combined fanout.md.
+Defaults to the flat-rate z.ai GLM Coding Plan when --model/--backend are omitted.
 """
 import argparse
+import concurrent.futures
+import datetime
+import fnmatch
 import json
 import os
 import re
@@ -56,6 +68,20 @@ WRITE_SCOPE = None
 READ_SCOPE = None
 REPO_MODE = False
 SCOPE_SRC = {}   # raw glob strings, for error messages
+
+# Explore mode: read-only. The tool list sent to the model has no write/shell tool, and the
+# dispatcher refuses them anyway (the JSON-fallback parser still recognises their names).
+EXPLORE = False
+GREP_MAX = 80          # matches shown per grep call
+LIST_MAX = 300         # entries shown per list_files call in explore mode
+INDEX_MAX = 60000      # files indexed per explore run
+SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".build", "build",
+             "dist", "DerivedData", ".venv", "venv", "Pods", ".worktrees", ".dd"}
+
+# z.ai's flat-rate GLM Coding Plan, the same route gemini.py calls `--base-url zai-coding`.
+# Its completions path has no /v1 segment, and it rate-limits CONCURRENCY (~6 in flight).
+ZAI_CODING_URL = "https://api.z.ai/api/coding/paas/v4"
+ZAI_MAX_JOBS = 5       # headroom under the ~6 ceiling for another session's z.ai call
 
 
 def glob_to_re(glob: str):
@@ -156,6 +182,61 @@ TOOLS = [
             "summary": {"type": "string"}}, "required": ["summary"]}}},
 ]
 
+SYSTEM_EXPLORE = """You are a careful code investigator working READ-ONLY inside a project directory.
+Your job is to answer the user's question about this code, with evidence.
+
+Tools: list_files, grep, read_file, finish. You cannot edit files or run commands.
+
+Rules:
+- All paths are RELATIVE to the project root. Never use absolute paths or `..`.
+- Search first, then read. Use grep to find where something lives, then read_file with
+  start_line/end_line around the hits. Do not read whole large files when a range will do.
+- read_file shows line numbers. Every factual claim in your answer must cite
+  `path:line` (or `path:start-end`) and quote the key line, so it can be checked.
+- Never guess. If you cannot find something, say "not found" and list what you searched.
+  A wrong answer is far worse than an honest "not found".
+- Do not repeat a search or read you have already done. Each tool call should learn
+  something new. Stop investigating once you can answer.
+- When done, call finish with `report`: your complete answer in markdown. Lead with the
+  direct answer, then the evidence (citations + quoted lines), then anything uncertain.
+"""
+
+EXPLORE_TOOLS = [
+    {"type": "function", "function": {
+        "name": "list_files",
+        "description": "List files under a directory (relative path), recursively. "
+                       "Optional glob filters by name or path, e.g. '*.swift'.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Relative directory, default '.'"},
+            "glob": {"type": "string", "description": "Optional filter, e.g. '*.py'"}},
+            "required": []}}},
+    {"type": "function", "function": {
+        "name": "grep",
+        "description": "Search file contents with a regular expression. Returns "
+                       "path:line: text for each match.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string", "description": "Python regular expression"},
+            "path": {"type": "string", "description": "Relative directory or file, default '.'"},
+            "glob": {"type": "string", "description": "Optional file filter, e.g. '*.swift'"},
+            "ignore_case": {"type": "boolean"}},
+            "required": ["pattern"]}}},
+    {"type": "function", "function": {
+        "name": "read_file",
+        "description": "Read a text file (relative path) with line numbers. Pass "
+                       "start_line/end_line to read a range.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "start_line": {"type": "integer"},
+            "end_line": {"type": "integer"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "finish",
+        "description": "Call when you can answer. Ends the session.",
+        "parameters": {"type": "object", "properties": {
+            "report": {"type": "string",
+                       "description": "Complete markdown answer with path:line citations"}},
+            "required": ["report"]}}},
+]
+
 
 def _resolve(workdir: str, path: str):
     """Resolve a relative path inside the sandbox; None if it escapes."""
@@ -240,11 +321,189 @@ def t_run_command(workdir, command):
     return f"exit code: {p.returncode}\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
 
 
+# ---------------------------------------------------------------- explore tools
+
+_INDEX = {}
+
+
+def explore_index(root):
+    """Repo-relative paths of the files an explore run may see, built once per run.
+
+    In a git checkout this is `git ls-files` (tracked + untracked-not-ignored), so build
+    output and vendored trees stay out. Elsewhere a walk that skips SKIP_DIRS. Every entry
+    is re-checked with isfile: the git index still lists files deleted from the tree."""
+    if root in _INDEX:
+        return _INDEX[root]
+    files = None
+    try:
+        p = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others",
+                            "--exclude-standard"], capture_output=True, timeout=60)
+        if p.returncode == 0:
+            files = sorted({f for f in p.stdout.decode(errors="replace").split("\0") if f})
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if files is None:
+        files = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            for fn in sorted(filenames):
+                files.append(os.path.relpath(os.path.join(dirpath, fn), root)
+                             .replace(os.sep, "/"))
+            if len(files) > INDEX_MAX:
+                break
+    files = [f for f in files[:INDEX_MAX] if os.path.isfile(os.path.join(root, f))]
+    _INDEX[root] = files
+    return files
+
+
+def _under(rel, path):
+    """True if repo-relative file `rel` is `path` itself or inside directory `path`."""
+    path = (path or ".").strip().strip("/")
+    if path in ("", "."):
+        return True
+    return rel == path or rel.startswith(path + "/")
+
+
+def _glob_ok(rel, glob):
+    return not glob or fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(rel.rsplit("/", 1)[-1], glob)
+
+
+def _scoped_files(root, path, glob):
+    """Files under `path` matching `glob`, or an error string if `path` escapes/is missing."""
+    full = _resolve(root, path or ".")
+    if not full:
+        return "ERROR: path escapes the project root"
+    if not os.path.exists(full):
+        return f"ERROR: no such file or directory: {path}"
+    rel = os.path.relpath(full, os.path.realpath(root)).replace(os.sep, "/")
+    return [f for f in explore_index(root) if _under(f, rel) and _glob_ok(f, glob)]
+
+
+def t_x_list(root, path=".", glob=None):
+    files = _scoped_files(root, path, glob)
+    if isinstance(files, str):
+        return files
+    if not files:
+        return "(no files)"
+    lines = []
+    for f in files[:LIST_MAX]:
+        try:
+            lines.append(f"{f}  ({os.path.getsize(os.path.join(root, f))} bytes)")
+        except OSError:
+            lines.append(f)
+    if len(files) > LIST_MAX:
+        lines.append(f"... ({len(files) - LIST_MAX} more; narrow path or glob)")
+    return "\n".join(lines)
+
+
+def t_x_read(root, path, start_line=None, end_line=None):
+    """Line-numbered read, so the model can cite path:line. Truncation names the next line."""
+    full = _resolve(root, path)
+    if not full:
+        return "ERROR: path escapes the project root"
+    if not os.path.isfile(full):
+        return f"ERROR: no such file: {path}"
+    try:
+        start = max(1, int(start_line or 1))
+        end = int(end_line) if end_line else None
+    except (TypeError, ValueError):
+        return "ERROR: start_line/end_line must be integers"
+    out, size, last = [], 0, 0
+    try:
+        with open(full, "r", errors="replace") as f:
+            for n, line in enumerate(f, 1):
+                if n < start:
+                    continue
+                if end is not None and n > end:
+                    break
+                row = f"{n:6}| {line.rstrip()[:400]}"
+                if size + len(row) > READ_LIMIT and out:
+                    out.append(f"... (truncated; call read_file with start_line={n} to continue)")
+                    return "\n".join(out)
+                out.append(row)
+                size += len(row) + 1
+                last = n
+    except Exception as exc:  # noqa: BLE001
+        return f"ERROR: {exc}"
+    if not out:
+        return f"(no lines in range; the file has {last or 'fewer than ' + str(start)} lines)"
+    return "\n".join(out)
+
+
+def t_x_grep(root, pattern, path=".", glob=None, ignore_case=False):
+    if not pattern:
+        return "ERROR: pattern is required"
+    note = ""
+    try:
+        rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+    except re.error as exc:
+        rx = re.compile(re.escape(pattern), re.IGNORECASE if ignore_case else 0)
+        note = f"(invalid regex: {exc}; searched it as literal text)\n"
+    files = _scoped_files(root, path, glob)
+    if isinstance(files, str):
+        return files
+    hits, total = [], 0
+    for rel in files:
+        full = os.path.join(root, rel)
+        try:
+            if os.path.getsize(full) > 2_000_000:
+                continue
+            with open(full, "rb") as fb:
+                if b"\0" in fb.read(1024):
+                    continue
+            with open(full, "r", errors="replace") as f:
+                for n, line in enumerate(f, 1):
+                    if rx.search(line):
+                        total += 1
+                        if len(hits) < GREP_MAX:
+                            hits.append(f"{rel}:{n}: {line.strip()[:240]}")
+        except OSError:
+            continue
+    if not hits:
+        return note + f"(no matches in {len(files)} files)"
+    more = (f"\n... ({total - GREP_MAX} more matches not shown; narrow the pattern, path "
+            f"or glob)") if total > GREP_MAX else ""
+    return note + "\n".join(hits) + more
+
+
+CITE_RE = re.compile(r"([A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?")
+
+
+def check_citations(root, report):
+    """Count path:line citations that point at a real file and a line it actually has.
+
+    Cheap, mechanical, and aimed at the fleet's main failure: a confident answer about a
+    file or line that does not exist. It cannot check that the quoted text is right."""
+    valid, invalid, counts = 0, [], {}
+    for m in CITE_RE.finditer(report or ""):
+        rel, a, b = m.group(1), int(m.group(2)), m.group(3)
+        rel = rel[2:] if rel.startswith("./") else rel
+        full = _resolve(root, rel)
+        if full and not os.path.isfile(full):
+            # Allow a bare basename when exactly one indexed file has it.
+            same = [f for f in explore_index(root) if f.rsplit("/", 1)[-1] == rel]
+            full = os.path.join(root, same[0]) if len(same) == 1 else None
+        n = None
+        if full and os.path.isfile(full):
+            if full not in counts:
+                try:
+                    with open(full, "rb") as f:
+                        counts[full] = sum(1 for _ in f)
+                except OSError:
+                    counts[full] = 0
+            n = counts[full]
+        if n and 1 <= a <= n and (not b or int(b) <= n):
+            valid += 1
+        else:
+            invalid.append(m.group(0))
+    return {"valid": valid, "invalid": len(invalid), "invalid_examples": invalid[:5]}
+
+
 # ---------------------------------------------------------------- fallback parsing
 # Some models (e.g. qwen2.5-coder via Ollama) can't emit native tool_calls and
 # instead write the call as JSON text. Parse those so they can still drive the loop.
 
-TOOL_NAMES = {"list_files", "read_file", "write_file", "run_command", "finish"}
+TOOL_NAMES = {"list_files", "read_file", "write_file", "run_command", "grep", "finish"}
 FENCE_RE = re.compile(r"```([a-zA-Z0-9_+-]*)[ \t]*\n?(.*?)```", re.DOTALL)
 
 WRITE_CONVENTION = (
@@ -260,6 +519,15 @@ NUDGE = (
     "Available tools: list_files(path), read_file(path), write_file(path, content), "
     "run_command(command), finish(summary). " + WRITE_CONVENTION + " If the task is fully "
     "complete AND you have run a successful verification, call finish."
+)
+
+NUDGE_EXPLORE = (
+    "You did not call a tool. To use a tool, respond with exactly one JSON object "
+    "in a ```json code block, like:\n"
+    '```json\n{"name": "grep", "arguments": {"pattern": "def main"}}\n```\n'
+    "Available tools: list_files(path, glob), grep(pattern, path, glob, ignore_case), "
+    "read_file(path, start_line, end_line), finish(report). When you can answer, call "
+    "finish with your complete markdown report, citing path:line for every claim."
 )
 
 FINISH_GATE = (
@@ -446,12 +714,22 @@ def chat_openai(model, messages, base_url, tools=True, api_key=None,
                "max_tokens": MAX_GEN_TOKENS}
     if tools:
         payload["tools"] = TOOLS
-    req = urllib.request.Request(base_url.rstrip("/") + completions_path,
-                                 json.dumps(payload).encode(),
-                                 {"Content-Type": "application/json",
-                                  "Authorization": f"Bearer {api_key or 'local'}"})
-    with urllib.request.urlopen(req, timeout=600) as r:
-        resp = json.load(r)
+    data = json.dumps(payload).encode()
+    for attempt in range(5):
+        req = urllib.request.Request(base_url.rstrip("/") + completions_path, data,
+                                     {"Content-Type": "application/json",
+                                      "Authorization": f"Bearer {api_key or 'local'}"})
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r:
+                resp = json.load(r)
+            break
+        except urllib.error.HTTPError as exc:
+            # z.ai answers a 7th concurrent request with an instant 429 (code 1302), which a
+            # parallel fan-out WILL hit. Same request again after a backoff; never a reroute.
+            if exc.code in (429, 502, 503) and attempt < 4:
+                time.sleep(4 * (2 ** attempt))  # 4, 8, 16, 32s
+                continue
+            raise
     msg = resp["choices"][0]["message"]
     return {"role": "assistant", "content": msg.get("content") or "",
             "tool_calls": msg.get("tool_calls") or []}
@@ -669,8 +947,172 @@ def teardown_worktree(repo, wt, carried):
                             "removal — inspect before trusting them:\n" + after)
 
 
+# ---------------------------------------------------------------- explore output + fan-out
+
+def _data_dir():
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+
+def write_report(args, report, ts):
+    """Write the explore report where it can be reviewed and verdicted later."""
+    path = args.report_out
+    if not path:
+        if os.environ.get("SMITH_NO_ARCHIVE") in ("1", "true", "yes"):
+            return None
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{ts}-smith_explore-{args.model}")
+        path = os.path.join(_data_dir(), "outputs", ts[:10],
+                            f"{safe}-{uuid.uuid4().hex[:6]}.md")
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(report + "\n")
+        return path
+    except OSError as exc:
+        print(f"[explore] could not write report to {path}: {exc}", file=sys.stderr)
+        return None
+
+
+def parse_questions(text):
+    """Questions separated by lines of exactly `---`; with none, one question per line
+    (blank lines and `#` comments skipped)."""
+    if re.search(r"(?m)^---[ \t]*$", text):
+        parts = re.split(r"(?m)^---[ \t]*$", text)
+    else:
+        parts = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    return [q.strip() for q in parts if q.strip()]
+
+
+def _slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].strip("-") or "question"
+
+
+def _is_metered(args):
+    """A route that bills per call. Fan-out multiplies it, so it needs --allow-metered.
+    Free: local ollama, and the flat-rate z.ai Coding Plan. Metered: the Gemini API,
+    Ollama Cloud (`name:cloud` and `name:size-cloud`), and any other openai host."""
+    if args.backend == "ollama":
+        tag = args.model.rsplit(":", 1)[1] if ":" in args.model else ""
+        return tag == "cloud" or tag.endswith("-cloud")
+    if args.backend == "openai":
+        host = args.base_url.rstrip("/")
+        return not (host == ZAI_CODING_URL or host.startswith(("http://localhost",
+                                                                "http://127.0.0.1")))
+    return True
+
+
+def run_fanout(args, ap):
+    """One explore agent per question, run as parallel child processes.
+
+    Children, not threads: smith_agent keeps its run state in module globals, and a child
+    per question also gives each its own transcript and ledger row. Success is judged from
+    the ARTIFACT, not the child's word: a question only counts as ok if its report file
+    exists and is non-empty. (`--batch` once reported 4/4 ok while writing 1 file.)"""
+    try:
+        with open(args.fanout) as f:
+            questions = parse_questions(f.read())
+    except OSError as exc:
+        ap.error(f"--fanout: cannot read {args.fanout}: {exc}")
+    if not questions:
+        ap.error(f"--fanout: no questions in {args.fanout}")
+    if _is_metered(args) and not args.allow_metered:
+        ap.error(f"--fanout on {args.backend}/{args.model} bills per call, {len(questions)} "
+                 f"agents x up to {args.max_turns} turns each. Use the flat-rate default "
+                 f"(omit --model/--backend) or local ollama, or pass --allow-metered.")
+    zai = args.backend == "openai" and args.base_url.rstrip("/") == ZAI_CODING_URL
+    jobs = args.jobs or (4 if zai else 1)
+    if zai and jobs > ZAI_MAX_JOBS:
+        print(f"[fanout] -j {jobs} capped to {ZAI_MAX_JOBS}: z.ai 429s past ~6 requests in "
+              f"flight", file=sys.stderr)
+        jobs = ZAI_MAX_JOBS
+    jobs = max(1, min(jobs, len(questions)))
+
+    stamp = time.strftime("%H%M%S") + "-" + uuid.uuid4().hex[:4]
+    out = os.path.abspath(args.out_dir or os.path.join(
+        _data_dir(), "outputs", time.strftime("%Y-%m-%d"), "fanout-" + stamp))
+    os.makedirs(out, exist_ok=True)
+    root = os.path.realpath(args.explore)
+
+    names = [f"q{i:02d}-{_slug(q)}" for i, q in enumerate(questions, 1)]
+    env = dict(os.environ, SMITH_FANOUT_ID=os.path.basename(out))
+
+    def child(i):
+        name, q = names[i], questions[i]
+        qfile = os.path.join(out, name + ".question.txt")
+        with open(qfile, "w") as f:
+            f.write(q + "\n")
+        cmd = [sys.executable, "-B", os.path.abspath(__file__), "--explore", root,
+               "--prompt-file", qfile, "--report-out", os.path.join(out, name + ".md"),
+               "--transcript", os.path.join(out, name + ".jsonl"),
+               "--model", args.model, "--backend", args.backend,
+               "--base-url", args.base_url, "--completions-path", args.completions_path,
+               "--max-turns", str(args.max_turns), "--num-ctx", str(args.num_ctx),
+               "--max-gen-tokens", str(args.max_gen_tokens), "--tag", args.tag]
+        if args.api_key_env:
+            cmd += ["--api-key-env", args.api_key_env]
+        if args.think:
+            cmd += ["--think", args.think]
+        t = time.time()
+        try:
+            # stdin=DEVNULL: a child that ever reads stdin must not hang on the parent's.
+            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, timeout=args.child_timeout, env=env)
+            lines = [ln for ln in p.stdout.splitlines() if ln.startswith("{")]
+            res = json.loads(lines[-1]) if lines else {
+                "finished": False, "stop": f"no_summary:exit-{p.returncode}",
+                "stderr": (p.stderr or "")[-400:]}
+        except subprocess.TimeoutExpired:
+            res = {"finished": False, "stop": f"timeout:{args.child_timeout}s"}
+        except (OSError, ValueError) as exc:
+            res = {"finished": False, "stop": f"error:{exc}"}
+        res.setdefault("seconds", round(time.time() - t, 1))
+        rpath = os.path.join(out, name + ".md")
+        res["ok"] = bool(res.get("finished")) and os.path.isfile(rpath) \
+            and os.path.getsize(rpath) > 1
+        if res.get("finished") and not res["ok"]:
+            res["stop"] = "report_missing"
+        tag = "ok  " if res["ok"] else "FAIL"
+        print(f"[fanout] {tag} {name}  {res.get('turns', '?')} turns, {res['seconds']}s, "
+              f"stop={res.get('stop')}", file=sys.stderr, flush=True)
+        return res
+
+    print(f"[fanout] {len(questions)} questions, {jobs} at a time, {args.model} -> {out}",
+          file=sys.stderr, flush=True)
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        results = list(pool.map(child, range(len(questions))))
+
+    combined = os.path.join(out, "fanout.md")
+    with open(combined, "w") as f:
+        f.write(f"# Fan-out: {len(questions)} questions on {root}\n\n"
+                f"model {args.model} ({args.backend}), {jobs} parallel, "
+                f"{round(time.time() - t0)}s. Each answer is a fleet DRAFT: check the "
+                f"load-bearing citations before acting on it.\n\n")
+        for name, q, res in zip(names, questions, results):
+            cites = res.get("cites") or {}
+            f.write(f"## {name}\n\n**Q:** {q}\n\n")
+            f.write(f"_{'ok' if res['ok'] else 'FAILED'} · {res.get('turns', '?')} turns · "
+                    f"{res.get('seconds')}s · stop={res.get('stop')} · citations "
+                    f"{cites.get('valid', 0)} valid / {cites.get('invalid', 0)} invalid"
+                    f"{' · ts ' + res['ts'] if res.get('ts') else ''}_\n\n")
+            if cites.get("invalid_examples"):
+                f.write("⚠ citations that point at no such file/line: "
+                        + ", ".join(f"`{c}`" for c in cites["invalid_examples"]) + "\n\n")
+            rpath = os.path.join(out, name + ".md")
+            if res["ok"]:
+                with open(rpath) as r:
+                    f.write(r.read().rstrip() + "\n\n")
+            else:
+                f.write("(no report)\n\n")
+    failed = [{"q": n, "stop": r.get("stop")} for n, r in zip(names, results) if not r["ok"]]
+    print(json.dumps({"fanout": len(questions), "ok": len(questions) - len(failed),
+                      "failed": failed, "jobs": jobs, "model": args.model,
+                      "seconds": round(time.time() - t0, 1), "out_dir": out,
+                      "combined": combined}))
+    return 1 if failed else 0
+
+
 def main():
-    global MAX_GEN_TOKENS, THINK, WRITE_SCOPE, READ_SCOPE, REPO_MODE
+    global MAX_GEN_TOKENS, THINK, WRITE_SCOPE, READ_SCOPE, REPO_MODE, EXPLORE, TOOLS
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=None,
                     help="required, unless the contract supplies it")
@@ -697,9 +1139,12 @@ def main():
                          "branch commits on a smith/* branch; none just reports.")
     ap.add_argument("--max-turns", type=int, default=25)
     ap.add_argument("--num-ctx", type=int, default=32768)
-    ap.add_argument("--backend", choices=["ollama", "gemini", "openai"], default="ollama")
+    ap.add_argument("--backend", choices=["ollama", "gemini", "openai"], default=None,
+                    help="default ollama; --explore defaults to openai + zai-coding")
     ap.add_argument("--base-url", default="http://localhost:8080",
-                    help="openai backend server (e.g. mlx_lm server, or a cloud host)")
+                    help="openai backend server (e.g. mlx_lm server, or a cloud host). "
+                         "'zai-coding' = the flat-rate z.ai GLM Coding Plan (sets the path "
+                         "and ZAI_API_KEY for you)")
     ap.add_argument("--api-key-env", default=None,
                     help="env var holding a Bearer token for the openai backend "
                          "(e.g. ZAI_API_KEY); omitted = 'local' for unauthenticated "
@@ -709,12 +1154,12 @@ def main():
                          "matches mlx_lm/LM Studio; override for hosts that don't follow "
                          "the /v1/chat/completions convention (e.g. z.ai: /chat/completions)")
     ap.add_argument("--transcript", default=None)
-    ap.add_argument("--max-gen-tokens", type=int, default=MAX_GEN_TOKENS,
-                    help="per-turn generation cap (default 1600). Raise for tasks that "
-                         "write large single files.")
-    ap.add_argument("--tag", default="app-build", metavar="TASKSHAPE",
+    ap.add_argument("--max-gen-tokens", type=int, default=None,
+                    help="per-turn generation cap (default 1600, --explore 16384). Raise "
+                         "for tasks that write large single files.")
+    ap.add_argument("--tag", default=None, metavar="TASKSHAPE",
                     help="task-shape label for the ledger / hebbian router "
-                         "(default: app-build).")
+                         "(default: app-build, --explore subagent-fanout).")
     ap.add_argument("--finish-gate", action="store_true",
                     help="bounce the first finish call with a requirement-audit prompt "
                          "(measured null result on qwen2.5-coder:14b, 2026-07-01)")
@@ -723,6 +1168,26 @@ def main():
                     help="ollama backend only: send Ollama's `think` field (default: the "
                          "model's own). 'off' fixes deepseek-v4.1-flash's temp-0 reasoning "
                          "loop; gpt-oss ignores 'off' and needs a level such as 'low'.")
+    ap.add_argument("--explore", default=None, metavar="DIR",
+                    help="read-only explore mode on DIR: list/grep/read only, no write or "
+                         "shell; ends with a cited markdown report. Excludes --repo/--workdir.")
+    ap.add_argument("--question", default=None,
+                    help="explore mode: the question, instead of --prompt-file")
+    ap.add_argument("--report-out", default=None,
+                    help="explore mode: write the report here (default: archived under "
+                         "data/outputs/ and also printed to stderr)")
+    ap.add_argument("--fanout", default=None, metavar="FILE",
+                    help="explore mode: one agent per question in FILE, in parallel. "
+                         "Questions are separated by '---' lines, or one per line.")
+    ap.add_argument("-j", "--jobs", type=int, default=None,
+                    help=f"--fanout parallelism (default 4 on z.ai, capped at "
+                         f"{ZAI_MAX_JOBS}; 1 on local ollama)")
+    ap.add_argument("--out-dir", default=None,
+                    help="--fanout: where reports go (default data/outputs/<date>/fanout-*)")
+    ap.add_argument("--child-timeout", type=int, default=1800,
+                    help="--fanout: seconds before one agent is killed (default 1800)")
+    ap.add_argument("--allow-metered", action="store_true",
+                    help="--fanout: permit a pay-per-use route (Gemini API, Ollama :cloud)")
     args = ap.parse_args()
 
     # Contract supplies defaults; an explicit CLI flag always wins.
@@ -736,15 +1201,42 @@ def main():
     except RepoError as exc:
         ap.error(str(exc))
 
-    if bool(args.repo) == bool(args.workdir):
-        ap.error("give exactly one of --repo (a real repository) or --workdir (a sandbox)")
+    if sum(bool(x) for x in (args.repo, args.workdir, args.explore)) != 1:
+        ap.error("give exactly one of --repo (a real repository), --workdir (a sandbox) "
+                 "or --explore (read-only investigation)")
+    EXPLORE = bool(args.explore)
+    if (args.fanout or args.question or args.report_out) and not EXPLORE:
+        ap.error("--fanout/--question/--report-out only apply to --explore")
+    if EXPLORE and not args.model and not args.backend:
+        # Bulk default is the flat-rate GLM Coding Plan: already paid for, $0 marginal,
+        # and the lane that scored 10/10 on the first read+summarize fan-out trial.
+        args.backend, args.base_url, args.model = "openai", "zai-coding", "glm-5.3"
+        print("[route] --explore defaults to z.ai glm-5.3 (flat-rate Coding Plan)",
+              file=sys.stderr)
+    args.backend = args.backend or "ollama"
+    if args.base_url == "zai-coding":
+        args.base_url = ZAI_CODING_URL
+        if args.completions_path == ap.get_default("completions_path"):
+            args.completions_path = "/chat/completions"
+        args.api_key_env = args.api_key_env or "ZAI_API_KEY"
+    args.tag = args.tag or ("subagent-fanout" if EXPLORE else "app-build")
+    if args.max_gen_tokens is None:
+        args.max_gen_tokens = 16384 if EXPLORE else MAX_GEN_TOKENS
     if not args.model:
         ap.error("--model is required (pass the flag, or set it in the contract)")
+    if args.fanout:
+        if args.question or args.prompt_file or args.contract:
+            ap.error("--fanout reads its questions from FILE; drop --question/--prompt-file")
+        sys.exit(run_fanout(args, ap))
     if task is None:
-        if not args.prompt_file:
-            ap.error("give --prompt-file or --contract")
-        with open(args.prompt_file) as f:
-            task = f.read()
+        if args.question:
+            task = args.question
+        elif not args.prompt_file:
+            ap.error("give --prompt-file or --contract" +
+                     (" (or --question)" if EXPLORE else ""))
+        else:
+            with open(args.prompt_file) as f:
+                task = f.read()
     if meta.get("verify"):
         task += ("\n\nVerify your change by running exactly this command, and do not call "
                  "finish until it passes:\n    " + meta["verify"])
@@ -765,7 +1257,13 @@ def main():
     REPO_MODE = bool(args.repo)
     WRITE_SCOPE = READ_SCOPE = None
     SCOPE_SRC.clear()
-    if args.repo:
+    system = SYSTEM_EXPLORE if EXPLORE else SYSTEM
+    if EXPLORE:
+        TOOLS = EXPLORE_TOOLS
+        workdir = os.path.realpath(args.explore)
+        if not os.path.isdir(workdir):
+            ap.error(f"--explore: not a directory: {args.explore}")
+    elif args.repo:
         repo = os.path.realpath(args.repo)
         wtroot = os.environ.get("SMITH_WORKTREES") or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "worktrees")
@@ -811,7 +1309,7 @@ def main():
 
     backend = args.backend
     api_key = os.environ.get(args.api_key_env) if args.api_key_env else None
-    messages = [{"role": "system", "content": SYSTEM},
+    messages = [{"role": "system", "content": system},
                 {"role": "user", "content": task}]        # ollama history
     contents = [{"role": "user", "parts": [{"text": task}]}]  # gemini history
     log("task", {"model": args.model, "backend": backend, "workdir": workdir,
@@ -828,10 +1326,22 @@ def main():
     turn, nudged, finish_bounced = 0, False, False
     native_ok = True  # tools= flag; flips False after an ollama tool-parse 500 -> fallback
     did_write = False  # gates `finished`: a real write_file must succeed this session
-    for turn in range(1, args.max_turns + 1):
+    report = ""        # explore mode: the answer, from finish(report=...) or a prose reply
+    nudge = NUDGE_EXPLORE if EXPLORE else NUDGE
+    # Explore gets one extra LAST-CALL turn: an agent that spent its budget reading still
+    # knows things, and "out of turns, nothing returned" throws all of it away.
+    limit = args.max_turns + (1 if EXPLORE else 0)
+    last_call = False
+    for turn in range(1, limit + 1):
+        if EXPLORE and turn == limit:
+            last_call = True
+            push_user("[system note] Your turn budget is used up. Call finish NOW with your "
+                      "report of what you found so far, citing path:line, and say plainly "
+                      "what you did not get to verify. No more searching.")
+            log("last_call", {"turn": turn})
         try:
             if backend == "gemini":
-                parts = chat_gemini(args.model, contents, SYSTEM)
+                parts = chat_gemini(args.model, contents, system)
                 contents.append({"role": "model", "parts": parts or [{"text": ""}]})
                 msg = gemini_parts_to_msg(parts)
             elif backend == "openai":
@@ -877,11 +1387,16 @@ def main():
                 calls = [{"function": {"name": n, "arguments": a}} for n, a in fb]
                 log("fallback_parse", [{"name": n, "args": a} for n, a in fb])
         if not calls:
-            if not nudged:
+            prose = (msg.get("content") or "").strip()
+            if EXPLORE and (last_call or len(prose) >= 300):
+                # A substantive prose answer IS the report; the stop label keeps it visible.
+                report, stop = prose, "no_tools"
+                break
+            if not nudged and not last_call:
                 # One shot at teaching the protocol before giving up.
                 nudged = True
-                push_user(NUDGE)
-                log("nudge", NUDGE)
+                push_user(nudge)
+                log("nudge", nudge)
                 continue
             # Model answered in prose with no tool call — treat as done (unverified).
             stop = "no_tools"
@@ -907,6 +1422,20 @@ def main():
             elif name == "finish":
                 finished, stop = True, "finish"
                 result = "session ended"
+                if EXPLORE:
+                    report = str(raw_args.get("report") or raw_args.get("summary") or "")
+            elif EXPLORE and name in ("write_file", "run_command"):
+                result = ("ERROR: this is a read-only investigation; only list_files, grep, "
+                          "read_file and finish exist")
+            elif EXPLORE and name == "list_files":
+                result = t_x_list(workdir, raw_args.get("path", "."), raw_args.get("glob"))
+            elif EXPLORE and name == "read_file":
+                result = t_x_read(workdir, raw_args.get("path", ""),
+                                  raw_args.get("start_line"), raw_args.get("end_line"))
+            elif EXPLORE and name == "grep":
+                result = t_x_grep(workdir, raw_args.get("pattern", ""),
+                                  raw_args.get("path", "."), raw_args.get("glob"),
+                                  bool(raw_args.get("ignore_case")))
             elif name == "list_files":
                 result = t_list_files(workdir, raw_args.get("path", "."))
             elif name == "read_file":
@@ -942,18 +1471,38 @@ def main():
             # Non-native templates may not render the tool role; deliver results
             # as a user message instead, and restate the protocol.
             push_user("\n\n".join(fb_results) +
-                      "\n\nContinue. Respond with your next single tool call as a "
-                      "```json block, or call finish when done and verified. " +
-                      WRITE_CONVENTION)
+                      ("\n\nContinue. Respond with your next single tool call as a "
+                       "```json block, or call finish with your report when you can answer."
+                       if EXPLORE else
+                       "\n\nContinue. Respond with your next single tool call as a "
+                       "```json block, or call finish when done and verified. " +
+                       WRITE_CONVENTION))
 
     # A finish (explicit or prose-only give-up) only counts if a write_file actually
     # landed this session — otherwise it's a false-positive completion (the model
     # talked, verified nothing, changed nothing). Every real task needs a write.
-    really_finished = (finished or stop == "no_tools") and did_write
-    if not really_finished and stop in ("finish", "no_tools"):
-        stop = f"{stop}_no_write"
+    if EXPLORE:
+        # Explore writes nothing by design; what it owes is a non-empty answer.
+        report = report.strip()
+        really_finished = bool(report)
+        if not report and stop in ("finish", "no_tools"):
+            stop = f"{stop}_empty_report"
+        elif report and last_call:
+            stop = f"{stop}_last_call"
+    else:
+        really_finished = (finished or stop == "no_tools") and did_write
+        if not really_finished and stop in ("finish", "no_tools"):
+            stop = f"{stop}_no_write"
     summary = {"finished": really_finished, "turns": turn,
                "seconds": round(time.time() - t0, 1), "stop": stop}
+    if EXPLORE:
+        # A run's identity everywhere downstream is (ts, script, model), and parallel
+        # fan-out children finish in the same second (measured: 3 of 5 on the first live
+        # run), so one verdict would grade all of them. Microseconds keep each run its own.
+        summary["ts"] = datetime.datetime.now().isoformat(timespec="microseconds")
+        summary["report"] = write_report(args, report, summary["ts"]) if report else None
+        summary["report_chars"] = len(report)
+        summary["cites"] = check_citations(workdir, report)
 
     if REPO_MODE:
         # The DIFF is the truth here: it sees the run_command writes that did_write never
@@ -994,6 +1543,8 @@ def main():
     log("summary", summary)
     if tlog:
         tlog.close()
+    if EXPLORE and report and not args.report_out:
+        print(report, file=sys.stderr)
     print(json.dumps(summary))
     led = dict(summary)
     # Keep the ledger one-line-per-run: counts, not the whole file list.
@@ -1001,6 +1552,11 @@ def main():
         led["files"] = len(summary["files"])
         led["violations"] = len(summary["violations"])
         led["artifacts"] = len(summary.get("artifacts", []))
+    if EXPLORE:
+        led["output_file"] = led.pop("report")
+        led["cites"] = f"{summary['cites']['valid']}/{summary['cites']['invalid']}"
+        if os.environ.get("SMITH_FANOUT_ID"):
+            led["fanout"] = os.environ["SMITH_FANOUT_ID"]
     _ledger({"script": "smith_agent", "backend": backend, "model": args.model,
              "tag": args.tag, "think": args.think, "workdir": workdir, "task": task[:120],
              **led})
