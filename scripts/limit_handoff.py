@@ -51,6 +51,9 @@ SC_PATH = re.compile(r"/soundcheck[\w-]*(?=[/\s\"'`]|$)", re.I)
 
 SC_TOOL = re.compile(r"^(mcp__soundcheck|mcp__plugin_soundcheck)", re.I)
 # Lane A recipe, measured 2026-09-12 (Notesmith "Provider handoff via Agent Notes").
+# `--model 'opus[1m]'` is load-bearing (2026-10-09): without it Claude Code gives glm-5.3 a
+# 200k window and a long session fails "Prompt is too long" before any call; with it the
+# 09-12 fork resumed at 156k input tokens. GLM's true ceiling past that is unmeasured.
 ZAI_ENV = {
     "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
@@ -238,7 +241,7 @@ cd {shlex.quote(cwd or HOME)} || exit 1
 export LIMIT_HANDOFF_ORIGIN={shlex.quote(session_id)}
 exec env ANTHROPIC_AUTH_TOKEN="$ZAI_API_KEY" \\
   {env} \\
-  claude --resume {shlex.quote(session_id)} --fork-session
+  claude --model 'opus[1m]' --resume {shlex.quote(session_id)} --fork-session
 """
 
 
