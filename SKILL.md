@@ -572,6 +572,30 @@ Probes: `python3 -B scripts/test_explore.py` (42 checks, a fake OpenAI server, n
 calls). Mutation-tested: dropping the stale-index check, the write refusal, or the
 empty-report rule each fails its own probe.
 
+## Limit-hit handoff — limit_handoff.py (keep working on GLM when Claude is cut off)
+
+One script on three hooks (StopFailure, Stop, SessionStart `startup|resume|clear`), all
+`python3 -B "$SKILL/scripts/limit_handoff.py"`. When a session hits a real subscription limit
+(`error == rate_limit` AND "hit your session/weekly limit"; the fast-mode credit 429 shares the
+type and is ignored) it writes `~/.claude/handoffs/<session>.md` from the transcript (zero
+tokens) and `~/.claude/handoffs/resume-glm.sh`, then notifies. Running that script is Lane A:
+`claude --resume <id> --fork-session` on z.ai glm-5.3 (Coding Plan, flat), full transcript and
+local MCP kept, claude.ai connectors off. In the GLM fork, the Stop hook rewrites the handoff
+"Written by: glm-5.3"; the next Claude session in an overlapping folder gets it injected once,
+marked unverified. Back on Claude, start or resume the ORIGINAL session, not the GLM fork
+(Claude reading GLM's thinking blocks is untested).
+- **SoundCheck refusal:** a session that USED SoundCheck material (an SC folder as cwd or in a
+  path, soundcheck MCP tools/skills, an Agent prompt naming it) or where Josh named it in a
+  prompt gets the local handoff but NO resume script, and an older script is deleted.
+  Compaction summaries and bare filenames don't count. Measured 2026-10-09 on 541 sessions:
+  24 flagged, ~7 of them false refusals (safe direction); a bare word match flagged 7 of the 9
+  real limit sessions.
+- Corpus: all 108 logged real limits (`~/.claude/stopfailure-payloads.jsonl`) trigger; the 4
+  fast-mode 429s and 22 other errors don't. Stop costs 0.07 s on a 72 MB transcript.
+- Test: `python3 -B scripts/test_limit_handoff.py` (24 checks, synthetic transcripts).
+  Revert-checked: dropping the limit-text match or the compact-summary exclusion fails it.
+- Origin: idea from github.com/Glazzy95/claude-mammouth-handoff (MIT), reviewed 2026-10-09.
+
 ## Local transcription — transcribe.py (audio → text, free, private)
 
 `python3 "$SKILL/scripts/transcribe.py" FILE` (wav/mp3/m4a/aiff; `--timestamps`;
