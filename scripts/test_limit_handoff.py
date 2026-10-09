@@ -61,12 +61,12 @@ edit = {"name": "Edit", "input": {"file_path": WORK + "/a.py"}}
 claude_tr = transcript("claude", [
     ("user", "fix the parser"),
     ("compact", "This session is being continued... SoundCheck material never goes to cloud backends."),
-    ("claude-opus-5", "on it", [edit, {"name": "Bash", "input": {"command": "grep -n x soundcheck-network-audit.md",
+    ("claude-opus-5", "on it", [edit, {"name": "Bash", "input": {"command": "grep -n x soundcheck-notes.md",
                                                                   "description": "Search memory"}}]),
 ])
 sc_tr = transcript("sc", [
     ("user", "update the bench script"),
-    ("claude-opus-5", "reading", [{"name": "Read", "input": {"file_path": "/Users/j/Python/soundcheck-mac-automation/x.py"}}]),
+    ("claude-opus-5", "reading", [{"name": "Read", "input": {"file_path": "/Users/j/Python/soundcheck-bench/x.py"}}]),
 ])
 sc_skill_tr = transcript("sc_skill", [
     ("user", "file this bug"),

@@ -45,8 +45,9 @@ LIMIT_RE = re.compile(r"hit your (session|weekly) limit", re.I)
 # under a bare word match (2026-10-09 corpus).
 SC_WORD = re.compile(r"sound\s*check", re.I)
 # A real path: the folder name right after a "/". Bare names (memory files such as
-# soundcheck-network-audit.md) are mentions, not use.
-SC_PATH = re.compile(r"/(SoundCheckHelper|SoundCheck_Network_Audit_\w+|soundcheck-[\w-]+)(?=[/\s\"'`]|$)", re.I)
+# soundcheck-notes.md) are mentions, not use.
+SC_PATH = re.compile(r"/soundcheck[\w-]*(?=[/\s\"'`]|$)", re.I)
+
 
 SC_TOOL = re.compile(r"^(mcp__soundcheck|mcp__plugin_soundcheck)", re.I)
 # Lane A recipe, measured 2026-09-12 (Notesmith "Provider handoff via Agent Notes").
