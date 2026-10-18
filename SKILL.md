@@ -75,6 +75,9 @@ Full recipes: [references/playbooks.md](references/playbooks.md).
 4. **Finish** — integrate yourself; send focused revision prompts rather than redoing.
 5. **Report + record the verdict** — tell the user what you delegated and verified, then:
    `python3 "$SKILL/scripts/verdict.py" good` (or `bad "why"`). One line, every review.
+   ⚠ With other sessions running, a bare verdict grades the newest run of ANY session
+   (2026-10-18: one landed on another session's classify run). Pass `--ts` from your own
+   run's ledger row; `grep '<your --purpose>' data/usage.jsonl` finds it.
 
 ## Using the helper
 
