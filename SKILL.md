@@ -138,6 +138,48 @@ over. Design + verification: [references/model-tailoring-2026-07-26.md](referenc
 | `ollama` | this Mac **unless the tag is a cloud tag** (`:cloud` OR `:<size>-cloud`, e.g. `gpt-oss:20b-cloud`) | free, unlimited — **except cloud tags** | images yes | private/offline/high-volume; the FLEET below. ⚠ **`--model <name>:cloud` is NOT local**: a signed-in daemon proxies it through `localhost:11434` to Ollama's servers, so it leaves the machine and spends the metered allowance. It looks identical to a local call at the call site — see Ollama Cloud below |
 | `openai` | any OpenAI-compatible URL | free tiers exist | no | burst beyond Gemini; shorthands `groq`\|`openrouter`\|`openai`\|`ollama`; auth `OPENAI_API_KEY` (Groq: `GROQ_API_KEY`). Groq `openai/gpt-oss-120b` = verified free frontier-adjacent. **Free clouds may train on your data** — which matters for SoundCheck material (Listen, Inc.'s IP, code-guarded) and credentials; Josh's own work is fine here |
 
+## Escalation ladder — `--cascade` (2026-10-20, opt-in)
+
+Idea taken from the "small / medium / large local" router pattern, minus the parts that do
+not fit this Mac. **Claude already picks the tag, so a small-model prompt classifier adds a hop
+and a silent-misroute risk; the part worth taking is the CASCADE.** Start at the cheapest rung the
+tag has earned; if the output fails a *mechanical* gate, hand the same prompt up one rung.
+
+```bash
+python3 "$SKILL/scripts/gemini.py" --cascade --tag classify "One word: ..."
+python3 "$SKILL/scripts/gemini.py" --cascade --tag code-draft --gate python "Write ..."
+python3 "$SKILL/scripts/gemini.py" --cascade --ladder T1,T2 --tag subagent-fanout "..."   # explicit
+python3 "$SKILL/scripts/cascade.py" --report     # escalation rate per tag, from the ledger
+```
+
+| rung | model | note |
+|---|---|---|
+| T0 | `llama3.2:3b` local | classify floor |
+| T1 | `gpt-oss:20b` local | free/private; the observer keeps it resident |
+| T2 | z.ai `glm-5.3` | the "large" tier: a 30B+ local model cannot co-reside with the observer on 36 GB |
+| T3 | `gemini-cli` pro | Google AI Pro login, text only |
+
+Default ladders (`LADDER_BY_TAG` in `cascade.py`) only add rungs ABOVE the route the tag already
+earned, so `--cascade` never starts lower than the plain call would. Unknown tags: T2, T3.
+
+- **Gates are mechanical only:** empty, `finish_reason=length`, `--json` that does not parse,
+  `--gate python` syntax error, a described-not-done reply, a rung that exits. A pass means
+  "worth reviewing", never "correct": the verdict loop is unchanged.
+- **Local rungs are skipped** when load > 1.5 x cores or Ollama is not answering
+  (local-fleet-preflight, now enforced). Missing `ZAI_API_KEY` skips T2.
+- **SoundCheck:** cloud rungs are DROPPED from the ladder (not rerouted). An all-cloud ladder
+  exits 2 with no call made. Path-based, like the plain guard.
+- **Blocked pairs** (`BLOCKED` in `cascade.py`, today `T1` + `doc-format`) are removed with no override.
+- **Only the winner prints.** Failed rungs are ledgered as `script: cascade-attempt`, tied to the
+  winner by `cascade_id`; they stay out of the review queue, `verdict.py`, `gap_report.py` and the
+  hebbian weights (a gate failure is a mechanical signal, not a verdict).
+- **The report only advises.** It never edits a routing table: a table changed by a report nobody
+  read is the stale-derived-state class. A tag escalating >= 40% over >= 5 runs is flagged to start higher.
+- Refused (exit 2) rather than ignored: `--backend/--model/--search/--batch/--consensus/--think/
+  --schema/--file` with `--cascade`.
+- Off by default. Flip a tag to cascade-by-default only after `--report` shows real runs.
+- Probes: `python3 -B scripts/test_cascade.py` (no model calls; 7 guards mutation-tested).
+
 ## Local fleet routing (gym-earned; evidence → [references/measured-results.md](references/measured-results.md))
 
 - **Quality code / app builds:** `gpt-oss:20b` (12 GB) — TRUSTED code-gen/struct/edits/

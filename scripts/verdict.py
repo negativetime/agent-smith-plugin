@@ -58,7 +58,7 @@ def main():
                 continue
             if not isinstance(r, dict):
                 continue
-            if r.get("script") in ("verdict", "witness"):
+            if r.get("script") in ("verdict", "witness", "cascade-attempt"):
                 continue
             runs.append(r)
 

@@ -97,7 +97,8 @@ def is_benchmark(r):
     routing checks, which would otherwise pad the research/doc-format lanes with
     runs that delegated no actual work (2026-07-28).
     """
-    return r.get("tag") in ("gym-eval", "smoke") or r.get("project") == "agent-gym"
+    return (r.get("tag") in ("gym-eval", "smoke") or r.get("project") == "agent-gym"
+            or r.get("script") == "cascade-attempt")
 
 
 def load_ledger():

@@ -42,7 +42,7 @@ def is_reviewable(r):
     worth grading. Counting them as 'unreviewed' made the loop look abandoned
     when the real queue was small (found 2026-07-28).
     """
-    if r.get("tag") == "smoke":
+    if r.get("tag") == "smoke" or r.get("script") == "cascade-attempt":
         return False
     return bool(r.get("purpose") or r.get("task") or r.get("tag"))
 

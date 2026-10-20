@@ -725,6 +725,8 @@ def call_ollama(prompt, system, temperature, model, max_tokens, images=None, thi
         log(f"ERROR: can't reach Ollama ({e}). Start it: `ollama serve`, then `ollama pull {model}`.")
         sys.exit(1)
     _note_reported_model(resp)
+    global _LAST_FINISH
+    _LAST_FINISH = resp.get("done_reason")
     text = resp.get("message", {}).get("content", "")
     thinking = resp.get("message", {}).get("thinking") or ""
     log("\n--- ollama meta ---")
@@ -1017,7 +1019,7 @@ def _unreviewed_count(path):
                     continue
                 # Gym runs stay IN: an eval is not fleet usage, but it is still
                 # gradeable evidence, so usage_report keeps it in the review queue.
-                if r.get("script") == "witness" or r.get("tag") == "smoke":
+                if r.get("script") in ("witness", "cascade-attempt") or r.get("tag") == "smoke":
                     continue
                 if not (r.get("purpose") or r.get("task") or r.get("tag")):
                     continue
@@ -1061,6 +1063,11 @@ def _archive_output(ledger_path, rec, text):
 # account can no longer call. Same failure class as fleet_check.py's "ollama pull updates
 # weights in place" — but on a cloud lane, where nothing was watching.
 _REPORTED_MODEL = None
+
+# Why the last openai-compat / ollama call stopped ("stop", "length", ...). A side channel
+# like _REPORTED_MODEL: the call functions return only text, and the cascade needs to tell a
+# truncated answer from a finished one. Set by the backend that ran, read by run_cascade().
+_LAST_FINISH = None
 
 
 def _note_reported_model(resp):
@@ -1110,7 +1117,7 @@ def _ledger(rec, output=None):
             f.write(json.dumps(rec) + "\n")
         # Only nag on rows that are themselves reviewable — a witness/verdict row
         # would otherwise double-print the same reminder after a single run.
-        if rec.get("script") not in ("witness", "verdict"):
+        if rec.get("script") not in ("witness", "verdict", "cascade-attempt"):
             n = _unreviewed_count(path)
             if n:
                 log(f"[review] {n} run{'s' if n != 1 else ''} awaiting verdict — "
@@ -1217,7 +1224,9 @@ def call_openai_compat(prompt, system, temperature, model, max_tokens, base_url,
             log(f"ERROR: can't reach {base} ({e}).")
             sys.exit(1)
     _note_reported_model(resp)
+    global _LAST_FINISH
     choice = (resp.get("choices") or [{}])[0]
+    _LAST_FINISH = choice.get("finish_reason")
     msg = choice.get("message", {}) or {}
     text = msg.get("content", "") or ""
     u = resp.get("usage") or {}
@@ -1694,6 +1703,157 @@ def run_batch(args, prompt):
     _ledger(rec)
 
 
+def _cascade_validate(args):
+    """Refuse every flag combination --cascade would silently ignore. A switch that does
+    nothing is the house bug class, and here it would also mean a caller who typed
+    --model believes the ladder obeyed it."""
+    bad = []
+    if args.backend or args.model or args.base_url:
+        bad.append("--backend/--model/--base-url (the ladder chooses them; use --ladder/--start)")
+    if args.search:
+        bad.append("--search (web grounding has no ladder; use --tag research)")
+    if args.batch or args.consensus:
+        bad.append("--batch/--consensus (batch has its own escalation queue)")
+    if args.think:
+        bad.append("--think (ollama only; the ladder has cloud rungs)")
+    if args.schema:
+        bad.append("--schema (only the Gemini API honours it; use --json to gate on valid JSON)")
+    if args.file:
+        bad.append("--file (no ladder reads files; images have no cloud rung)")
+    if bad:
+        log("ERROR: --cascade cannot be combined with: " + "; ".join(bad))
+        sys.exit(2)
+
+
+def _probe_local():
+    """(load1, ncpu, ollama_up) — split out so tests can fake a wedged Mac."""
+    try:
+        load1 = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        load1 = None
+    up = False
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as r:
+            up = r.status == 200
+    except Exception:       # noqa: BLE001 — any failure means "not answering"
+        up = False
+    return load1, os.cpu_count(), up
+
+
+def _agentic_gate(text):
+    return "agentic-nonanswer" if detect_agentic_nonanswer(text) else None
+
+
+def _call_rung(rung, name, prompt, sys_eff, args, max_tokens):
+    if rung["backend"] == "ollama":
+        return call_ollama(prompt, sys_eff, args.temperature, rung["model"], max_tokens)
+    if rung["backend"] == "openai":
+        return call_openai_compat(prompt, sys_eff, args.temperature, rung["model"],
+                                  max_tokens, rung["base_url"])
+    return call_gemini_cli(prompt, sys_eff, args.temperature, rung["model"])
+
+
+def run_cascade(args, prompt, t0):
+    """Escalation ladder (2026-10-20). One prompt walks up the rungs until an output passes
+    the mechanical gates; only the accepted output reaches stdout. Failed attempts are
+    ledgered as script "cascade-attempt" (out of the review queue, out of the routing
+    weights: a gate failure is a mechanical signal, not a verdict) and tied to the winner by
+    `cascade_id`. `cascade.py --report` turns them into per-tag escalation rates.
+
+    The SoundCheck guard runs per rung and DROPS cloud rungs rather than exiting, because
+    stopping at the local rung is the whole point; if nothing is left the run fails closed
+    instead of silently rerouting (same policy as enforce_soundcheck_guard)."""
+    global _LAST_FINISH, _REPORTED_MODEL
+    import datetime
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import cascade
+
+    try:
+        names = cascade.build_ladder(args.tag, args.ladder, args.start)
+    except ValueError as e:
+        log(f"ERROR: {e}")
+        sys.exit(2)
+    if not names:
+        log(f"ERROR: every rung is blocked for --tag {args.tag}.")
+        sys.exit(2)
+
+    hits = _soundcheck_paths(args)
+    if hits:
+        kept = [n for n in names if not _cloud_route(cascade.RUNGS[n]["backend"],
+                                                     cascade.RUNGS[n]["model"])]
+        log("[cascade] SoundCheck material in play: cloud rungs removed ("
+            + ", ".join(n for n in names if n not in kept) + "), ladder is now local-only.")
+        names = kept
+        if not names:
+            log("ERROR: --cascade has no local rung for this ladder, and SoundCheck material "
+                "may not go to a cloud backend. Pipe it to --backend ollama by hand.")
+            sys.exit(2)
+
+    cid = datetime.datetime.now().isoformat(timespec="microseconds") + f"-{os.getpid()}"
+    path, local_skip, probed = [], None, False
+    for i, name in enumerate(names):
+        rung = cascade.RUNGS[name]
+        label = f"{name} {rung['model']}"
+        if rung["local"]:
+            if not probed:
+                local_skip = cascade.local_unhealthy(*_probe_local())
+                probed = True
+            if local_skip:
+                log(f"[cascade] skip {label}: {local_skip}")
+                path.append(f"{name}:skip")
+                continue
+        env_needed = rung.get("needs_env")
+        if env_needed and not os.environ.get(env_needed):
+            log(f"[cascade] skip {label}: {env_needed} is not set")
+            path.append(f"{name}:skip")
+            continue
+
+        max_tokens = cascade.floor_max_tokens(name, args.max_tokens)
+        sys_eff, tailored = tailor_system(args.system, rung["model"], args.tag, args.no_tailor)
+        if tailored:
+            log(f"[tailor] appended corrective clause for {', '.join(tailored)}")
+        _LAST_FINISH, _REPORTED_MODEL = None, None
+        log(f"[cascade] try {label}  (rung {i + 1}/{len(names)})")
+        t1 = time.time()
+        reason, text = None, ""
+        try:
+            text = _call_rung(rung, name, prompt, sys_eff, args, max_tokens)
+        except SystemExit as e:
+            reason = f"call-failed (exit {e.code})"
+        if reason is None:
+            reason = cascade.check_output(
+                text, finish_reason=_LAST_FINISH, want_json=bool(args.json),
+                want_python=args.gate == "python", extra=(_agentic_gate,))
+        row = {"backend": rung["backend"], "model": rung["model"],
+               "purpose": _subject(prompt, args.purpose), "tag": args.tag,
+               "prompt_chars": len(prompt), "out_chars": len(text or ""),
+               "cascade_id": cid, "rung": name, "rung_index": i,
+               "seconds": round(time.time() - t1, 1)}
+        if reason:
+            log(f"[cascade] {label} FAILED gate: {reason}")
+            path.append(f"{name}:{reason}")
+            _ledger({"script": "cascade-attempt", "status": "gate_fail",
+                     "gate_reason": reason, **row}, output=text or None)
+            continue
+        path.append(f"{name}:ok")
+        log(f"[cascade] {' -> '.join(path)}")
+        print(text)
+        sys.stdout.flush()
+        _ledger({"script": "gemini", "status": "ok", "cascade": path, "tailored": tailored or None,
+                 "finish": _LAST_FINISH, **{**row, "seconds": round(time.time() - t0, 1)}},
+                output=text)
+        if rung["backend"] == "ollama":
+            _witness(prompt, sys_eff, rung["model"], text, [], "oneshot")
+        return
+
+    log(f"ERROR: every rung failed or was skipped: {' -> '.join(path)}")
+    _ledger({"script": "cascade-attempt", "status": "exhausted", "cascade_id": cid,
+             "tag": args.tag, "purpose": _subject(prompt, args.purpose), "rung": "-",
+             "rung_index": len(names), "gate_reason": "exhausted", "cascade": path,
+             "seconds": round(time.time() - t0, 1)})
+    sys.exit(1)
+
+
 def main():
     # Force UTF-8 on stdout/stderr so Gemini's Unicode output (em-dashes, accents, etc.)
     # prints cleanly on Windows consoles, which often default to cp1252.
@@ -1765,6 +1925,22 @@ def main():
     ap.add_argument("--allow-metered", action="store_true", dest="allow_metered",
                     help="permit a --batch fan-out over a :cloud tag, which bills every "
                          "manifest item against the Ollama Cloud allowance")
+    ap.add_argument("--cascade", action="store_true",
+                    help="Escalation ladder: start at the cheapest rung the tag has earned and "
+                         "hand the SAME prompt to the next rung when an output fails a "
+                         "mechanical gate (empty, truncated, bad --json, --gate python syntax "
+                         "error, a described-not-done reply). Rungs: T0 llama3.2:3b, T1 "
+                         "gpt-oss:20b, T2 z.ai glm-5.3, T3 gemini-cli pro (see cascade.py). "
+                         "Local rungs are skipped when the Mac is overloaded or Ollama is down. "
+                         "Text only: incompatible with --backend/--model/--search/--batch/"
+                         "--consensus/--think/--schema/--file.")
+    ap.add_argument("--ladder", default=None, metavar="T1,T2",
+                    help="--cascade: replace the tag's default ladder with these rungs, in order.")
+    ap.add_argument("--start", default=None, metavar="RUNG",
+                    help="--cascade: skip every rung below this one on the ladder.")
+    ap.add_argument("--gate", choices=["python"], default=None,
+                    help="--cascade: extra mechanical gate. python = the output must parse "
+                         "(syntax-checked, never executed).")
     ap.add_argument("--no-tailor", action="store_true", dest="no_tailor",
                     help="Skip auto-appended per-model corrective clauses (see MODEL_PROFILES). "
                          "Route warnings for a known-bad model+tag combo still print.")
@@ -1781,6 +1957,12 @@ def main():
             "the hebbian router. Reuse an existing tag or coin a new one.")
         sys.exit(2)
 
+    if args.cascade:
+        _cascade_validate(args)
+    elif args.ladder or args.start or args.gate:
+        log("ERROR: --ladder/--start/--gate only mean something with --cascade.")
+        sys.exit(2)
+
     # 2026-08-31 cost directive (Josh, explicit, twice): "use z.ai over Gemini —
     # I already paid for a year of z.ai." research now DEFAULTS to the z.ai grounded
     # lane DESPITE the measured accuracy gap (glm-5.3 scored 6/10 on the 08-31 re-run
@@ -1793,7 +1975,8 @@ def main():
     # when a research answer is correctness-critical and hard to re-verify.
     # Grounding is forced on: ungrounded GLM research is strictly worse (pure
     # pre-training), and web_search is $0 marginal on the flat-rate Coding Plan.
-    if args.tag == "research" and args.backend is None and args.model is None:
+    if args.tag == "research" and args.backend is None and args.model is None \
+            and not args.cascade:
         args.backend = "openai"
         args.base_url = "zai-coding"
         args.model = "glm-5.3"
@@ -1812,7 +1995,9 @@ def main():
     # of either always wins. --search has no LOCAL equivalent, so it always forces
     # cloud regardless of either table. Paid-subscription checked first:
     # it beat the local baseline in the gym, so it wins the tags it covers.
-    if args.backend is None and args.model is None and not args.search \
+    if args.cascade:
+        pass          # the ladder picks every rung; the per-tag tables do not apply
+    elif args.backend is None and args.model is None and not args.search \
             and args.tag in DEFAULT_PAID_FOR_TAG:
         cfg = DEFAULT_PAID_FOR_TAG[args.tag]
         args.backend = "openai"
@@ -1844,8 +2029,9 @@ def main():
                 f"(reasoning-budget floor for this shape — silent empty output otherwise) "
                 f"— pass --max-tokens to override")
             args.max_tokens = floor
-    args.backend = args.backend or "gemini"
-    enforce_soundcheck_guard(args)
+    if not args.cascade:
+        args.backend = args.backend or "gemini"
+        enforce_soundcheck_guard(args)    # --cascade checks this per rung instead
 
     if args.think:
         # Refuse rather than ignore: a switch that silently does nothing is the house bug
@@ -1888,6 +2074,10 @@ def main():
     if not prompt.strip() and not args.file:
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)
+
+    if args.cascade:
+        run_cascade(args, prompt, t0)
+        return
 
     if args.batch:
         run_batch(args, prompt)
