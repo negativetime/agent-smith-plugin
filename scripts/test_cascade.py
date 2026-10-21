@@ -44,7 +44,8 @@ check(gemini._agentic_gate("I have created the file as requested.") == "agentic-
       "gate: agentic non-answer is caught")
 
 # ---- ladder --------------------------------------------------------------------------
-check(cascade.build_ladder("classify") == ["T0", "T1", "T2"], "ladder: classify climbs local -> cloud")
+check(cascade.build_ladder("classify") == ["T1", "T2"], "ladder: classify starts at T1 (T0 failed gym struct_classify)")
+check(cascade.build_ladder("classify", explicit="T0,T1,T2") == ["T0", "T1", "T2"], "ladder: T0 still reachable explicitly")
 check(cascade.build_ladder("never-heard-of-it") == ["T2", "T3"], "ladder: unknown tag starts at T2")
 check(cascade.build_ladder("code-draft", start="T3") == ["T3"], "ladder: --start drops lower rungs")
 check(cascade.build_ladder("x", explicit="t1,t2") == ["T1", "T2"], "ladder: explicit, case-folded")
@@ -138,7 +139,7 @@ def ledger():
         return [json.loads(x) for x in f if x.strip()]
 
 
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"],
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"],
                             {"T0": "", "T1": "", "T2": "answer from glm"})
 check(code == 0 and out.strip() == "answer from glm", "e2e: empty T0 and T1 escalate to T2; ONLY the winner prints")
 check(calls == ["T0", "T1", "T2"], f"e2e: rungs tried in order {calls}")
@@ -151,18 +152,18 @@ check(win[0]["rung"] == "T2" and win[0]["cascade"] == ["T0:empty", "T1:empty", "
       f"e2e: winner row records the path {win[0].get('cascade')}")
 check(gemini._unreviewed_count(os.environ["SMITH_LEDGER"]) == 1, "e2e: attempt rows stay out of the review queue")
 
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"],
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"],
                             {"T0": ("partial", "length"), "T1": "full answer"})
 check(out.strip() == "full answer" and calls == ["T0", "T1"], "e2e: a truncated answer (finish_reason=length) escalates")
 
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"],
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"],
                             {"T0": "EXIT", "T1": "recovered"})
 check(out.strip() == "recovered" and "call-failed" in err, "e2e: a rung that exits is an escalation, not a crash")
 
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"], {"T2": "cloud only"}, probe=(23.0, 12, True))
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"], {"T2": "cloud only"}, probe=(23.0, 12, True))
 check(calls == ["T2"] and out.strip() == "cloud only", f"e2e: overloaded Mac skips BOTH local rungs {calls}")
 
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"], {"T2": "cloud only"}, probe=(1.0, 12, False))
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"], {"T2": "cloud only"}, probe=(1.0, 12, False))
 check(calls == ["T2"], "e2e: Ollama down skips the local rungs")
 
 os.environ.pop("ZAI_API_KEY")
@@ -170,7 +171,7 @@ code, out, err, calls = run(["--cascade", "--tag", "code-draft", "go"], {"T3": "
 check(calls == ["T3"] and "ZAI_API_KEY is not set" in err, "e2e: no ZAI key skips T2 and says why")
 os.environ["ZAI_API_KEY"] = "test"
 
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"], {})
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"], {})
 check(code == 1 and out == "" and calls == ["T0", "T1", "T2"], "e2e: every rung failing exits 1 with empty stdout")
 check(ledger()[-1]["status"] == "exhausted", "e2e: exhaustion is ledgered")
 
@@ -181,7 +182,7 @@ check(out.strip() == "def f():\n    return 1" and calls == ["T2", "T3"], "e2e: -
 # SoundCheck: cloud rungs are DROPPED, never used, never silently rerouted.
 sc = os.path.join(tmp, "soundcheck-stuff")
 os.makedirs(sc)
-code, out, err, calls = run(["--cascade", "--tag", "classify", "go"],
+code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"],
                             {"T0": "", "T1": "", "T2": "MUST NOT BE REACHED"}, cwd=sc)
 check(code == 1 and "T2" not in calls, f"soundcheck: classify ladder stops at local rungs {calls}")
 code, out, err, calls = run(["--cascade", "--tag", "code-draft", "go"], {"T2": "x", "T3": "x"}, cwd=sc)
@@ -190,7 +191,7 @@ check(code == 2 and calls == [], "soundcheck: an all-cloud ladder fails closed w
 # Flag conflicts are refused, not ignored.
 for flags in (["--model", "pro"], ["--backend", "ollama"], ["--search"], ["--think", "low"],
               ["--schema", "s.json"], ["--file", "x.png"]):
-    code, out, err, calls = run(["--cascade", "--tag", "classify", "go"] + flags, {})
+    code, out, err, calls = run(["--cascade", "--ladder", "T0,T1,T2", "--tag", "classify", "go"] + flags, {})
     check(code == 2 and calls == [], f"flags: --cascade with {flags[0]} is refused")
 code, out, err, calls = run(["--ladder", "T1", "--tag", "classify", "go"], {})
 check(code == 2, "flags: --ladder without --cascade is refused")

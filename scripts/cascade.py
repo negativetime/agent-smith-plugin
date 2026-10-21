@@ -41,7 +41,10 @@ RUNGS = {
 # the earned one. Unknown tags start at T2: gemini's own default for them is the rate-limited
 # free API, which is a specialist lane, not a bulk one.
 LADDER_BY_TAG = {
-    "classify":        ["T0", "T1", "T2"],
+    # Starts at T1, not T0: llama3.2:3b scored 0.00 on agent-gym struct_classify/struct_invoice
+    # (2026-10-21), and the gates are mechanical, so a wrong-but-non-empty T0 answer would pass
+    # without ever escalating. T0 stays reachable via --ladder T0,T1,T2.
+    "classify":        ["T1", "T2"],
     "subagent-fanout": ["T1", "T2"],
     "code-draft":      ["T2", "T3"],
     "long-digest":     ["T2", "T3"],

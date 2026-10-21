@@ -154,7 +154,7 @@ python3 "$SKILL/scripts/cascade.py" --report     # escalation rate per tag, from
 
 | rung | model | note |
 |---|---|---|
-| T0 | `llama3.2:3b` local | classify floor |
+| T0 | `llama3.2:3b` local | on NO default ladder (0.00 on gym struct_classify); reach it with `--ladder T0,T1,T2` |
 | T1 | `gpt-oss:20b` local | free/private; the observer keeps it resident |
 | T2 | z.ai `glm-5.3` | the "large" tier: a 30B+ local model cannot co-reside with the observer on 36 GB |
 | T3 | `gemini-cli` pro | Google AI Pro login, text only |
