@@ -669,6 +669,14 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
+- **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every
+  good/bad grade counts, several on one run included; one incident counts once per route; a
+  grade marked `duplicate_of`, and any `stale` one, never count. Until then both reports kept
+  only the LAST grade per run, which silently hid 87 of 335 incidents, and gap_report counted
+  rows where usage_report counted incidents. 55 grades that `verdict.py --model pro|flash` had
+  filed on two stale runs (before the 09-07 stale-target guard) were moved to the runs they
+  graded; each keeps `moved_from`. `data/verdicts.db` keyed on ts and so held 328 of 411
+  grades; it is keyed by id now and rebuilds itself. Probes: `python3 -B scripts/test_grades.py`.
 - **Outputs are archived (2026-07-28).** Every run writes its answer to
   `data/outputs/<date>/<ts>-<script>-<model>.txt` and the ledger row carries `output_file`.
   Before this, the loop demanded a verdict on every run while the tool stored nothing to

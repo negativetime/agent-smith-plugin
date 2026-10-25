@@ -7,19 +7,14 @@
     python3 usage_report.py --unreviewed # the review queue: runs with no verdict
 """
 import argparse
-import hashlib
-import json
 import os
 from collections import Counter
 
+import grades
+from grades import run_key
+
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "usage.jsonl")
-
-
-def run_key(r):
-    """Identity of a run for verdict lookup — ts alone has only seconds
-    resolution, so two runs in the same second would collide."""
-    return (r.get("ts"), r.get("script"), r.get("model"))
 
 
 def is_benchmark(r):
@@ -61,22 +56,11 @@ def main():
     if not os.path.isfile(LEDGER):
         print(f"No ledger yet at {LEDGER} — run a delegation first.")
         return
-    rows, verdicts, witnesses = [], {}, []
-    with open(LEDGER) as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(r, dict):
-                continue
-            if r.get("script") == "verdict":
-                key = (r.get("ref_ts"), r.get("ref_script"), r.get("ref_model"))
-                verdicts[key] = r  # last verdict for a run wins
-            elif r.get("script") == "witness":
-                witnesses.append(r)
-            else:
-                rows.append(r)
+    rows, grade_rows, witnesses = grades.read(LEDGER)
+    # A mark beside a run and the review queue ask "has anyone looked at this run", which
+    # the last grade on it answers. Every COUNT below uses every grade (grades.py): keeping
+    # only the last one per run dropped 87 of 335 incidents before 2026-10-25.
+    verdicts = grades.latest(grade_rows)
     all_rows = rows  # routing weights are cumulative — never filtered by --today
     if args.today:
         import datetime
@@ -104,8 +88,9 @@ def main():
         print(f"agentic (smith_agent): {len(agentic)} runs, "
               f"{finished} finished ({finished/len(agentic):.0%}); "
               f"stops: {dict(Counter(r.get('stop') for r in agentic))}")
-    good = [r for r in rows if (verdicts.get(run_key(r)) or {}).get("verdict") == "good"]
-    bad = [r for r in rows if (verdicts.get(run_key(r)) or {}).get("verdict") == "bad"]
+    pairs = grades.judged(rows, grade_rows)
+    good = [(r, v) for r, v in pairs if v["verdict"] == "good"]
+    bad = [(r, v) for r, v in pairs if v["verdict"] == "bad"]
     if good or bad:
         rate = len(good) / (len(good) + len(bad))
         # Denominator is the REVIEWABLE population, not every row — legacy and smoke
@@ -116,7 +101,7 @@ def main():
         stale = sum(1 for r in rows
                     if (verdicts.get(run_key(r)) or {}).get("verdict") == "stale")
         unreviewable = len(rows) - len(reviewable)
-        print(f"verified: {len(good)} good, {len(bad)} bad "
+        print(f"verified: {len(good)} good, {len(bad)} bad grades "
               f"({rate:.0%} quality on reviewed), {pending} awaiting verdict"
               + (f", {stale} stale (output not retained)" if stale else "")
               + (f"  [+{unreviewable} unreviewable: pre-2026-07-18 or smoke]"
@@ -147,35 +132,15 @@ def main():
         print("by project:")
         for proj, n in by_project.most_common(8):
             print(f"  {n:4}  {proj}")
-    routes = {}  # (tag, model) -> [(run_ts, verdict, incident), ...] judged runs only
-    for r in all_rows:
-        v = verdicts.get(run_key(r))
-        if not v or v.get("verdict") not in ("good", "bad"):
-            continue
-        pair = (v.get("tag") or "untagged", r.get("model") or "?")
-        # One BUG graded across N runs is ONE event. Pre-2026-08-15 verdicts predate the
-        # `incident` field, so fall back to hashing the note text — which is exactly how
-        # the inflation was found: 20 `translate` bad rows, ONE byte-identical note, all
-        # written in the same second. Counting rows suppressed that route 20x too hard.
-        note = " ".join((v.get("note") or "").split()).casefold()
-        incident = v.get("incident") or (
-            hashlib.sha1(note.encode()).hexdigest()[:10] if note else None)
-        routes.setdefault(pair, []).append((r.get("ts") or "", v["verdict"], incident))
+    # One BUG graded across N runs is ONE event (20 `translate` bad rows with one note,
+    # all written in the same second, suppressed that route 20x too hard). grades.routes
+    # counts every grade, one per incident per route, in run order.
+    routes, collapsed_by = grades.routes(grades.judged(all_rows, grade_rows))
     if routes:
         print("routing weights (hebbian) — counting INCIDENTS, not rows:")
         for (tag, model), judged in sorted(routes.items(),
                                            key=lambda kv: (-len(kv[1]), kv[0])):
-            judged.sort()  # run-ts order; unreviewed runs never enter the chain
-            rows_n = len(judged)
-            seen, deduped = set(), []
-            for ts, verdict, inc in judged:
-                if inc is not None and inc in seen:
-                    continue          # same incident already counted for this route
-                if inc is not None:
-                    seen.add(inc)
-                deduped.append((ts, verdict))
-            collapsed = rows_n - len(deduped)
-            judged = deduped
+            collapsed = collapsed_by.get((tag, model), 0)
             goods = sum(1 for _, verdict in judged if verdict == "good")
             bads = len(judged) - goods
             streak = 0
@@ -209,8 +174,7 @@ def main():
                   f"'{w.get('primary_out','')[:40]}' vs '{w.get('witness_out','')[:40]}'")
     if bad:
         print("\nverified-BAD (regression-test feed):")
-        for r in bad[-10:]:
-            v = verdicts[run_key(r)]
+        for r, v in bad[-10:]:
             print(f"  {r.get('ts','?')[:19]}  {r.get('script')}:{r.get('model')}  "
                   f"— {v.get('note', '(no note)')[:90]}")
     legacy_hidden = 0

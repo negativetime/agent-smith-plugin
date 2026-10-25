@@ -27,6 +27,8 @@ import subprocess
 import sys
 from collections import Counter
 
+import grades
+
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(SKILL, "data", "usage.jsonl")
 AUDIT = "/Users/joshualangberg/Python/docs/token_audit.json"
@@ -102,48 +104,31 @@ def is_benchmark(r):
 
 
 def load_ledger():
-    rows, verdicts = [], {}
-    if not os.path.isfile(LEDGER):
-        return rows, verdicts
-    with open(LEDGER) as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(r, dict):
-                continue
-            if r.get("script") == "verdict":
-                verdicts[(r.get("ref_ts"), r.get("ref_script"), r.get("ref_model"))] = r
-            elif r.get("script") != "witness":
-                rows.append(r)
-    return rows, verdicts
+    """(runs, grades). Counting goes through grades.py, the rule usage_report.py uses too."""
+    rows, grade_rows, _ = grades.read(LEDGER)
+    return rows, grade_rows
 
 
-def trust_for(tag, rows, verdicts):
-    """Measured quality per model for a shape: {model: (good, bad)}."""
+def trust_for(tag, rows, grade_rows):
+    """Measured quality per model for a shape: {model: (good, bad)}, one per incident."""
     out = {}
-    for r in rows:
-        v = verdicts.get((r.get("ts"), r.get("script"), r.get("model")))
-        if not v or v.get("verdict") not in ("good", "bad"):
-            continue
-        if (v.get("tag") or "untagged") != tag:
-            continue
-        g, b = out.get(r.get("model"), (0, 0))
-        out[r.get("model")] = (g + (v["verdict"] == "good"), b + (v["verdict"] == "bad"))
+    routes, _ = grades.routes(grades.judged(rows, grade_rows))
+    for (t, model), chain in routes.items():
+        if t == tag:
+            g = sum(1 for _, verdict in chain if verdict == "good")
+            out[model] = (g, len(chain) - g)
     return out
 
 
-def still_routed(tag, model, rows, verdicts):
+def still_routed(tag, model, rows, grade_rows):
     """True if `tag` work was sent to `model` again AFTER the last bad verdict on it.
 
     Distinguishes a live misroute (keep warning) from one already closed in code or
     habit (stop warning). Timestamps are ISO-8601, so string compare is chronological.
     """
     last_bad = ""
-    for r in rows:
-        v = verdicts.get((r.get("ts"), r.get("script"), r.get("model")))
-        if not v or v.get("verdict") != "bad":
+    for r, v in grades.judged(rows, grade_rows):
+        if v["verdict"] != "bad":
             continue
         if r.get("model") != model or (v.get("tag") or "untagged") != tag:
             continue
@@ -172,7 +157,7 @@ def main():
     calls = dict(audit.get("tool_calls") or [])
     chars = dict(audit.get("tool_result_chars") or [])
 
-    all_rows, verdicts = load_ledger()
+    all_rows, grade_rows = load_ledger()
     # Benchmark runs are excluded from fleet-usage counts: an eval is not a
     # delegation. Their VERDICTS still stand as graded evidence for routing.
     bench = [r for r in all_rows if is_benchmark(r)]
@@ -200,7 +185,7 @@ def main():
         # all_rows on purpose: a gym eval is not fleet USAGE, but a verdict on one
         # is still graded evidence of how a model performs at that shape — often
         # better evidence than production review, since a hidden grader scored it.
-        trust = trust_for(s["tag"], all_rows, verdicts)
+        trust = trust_for(s["tag"], all_rows, grade_rows)
 
         if s.get("tools"):
             claude_unit, claude_val = "calls", claude_calls
@@ -235,7 +220,7 @@ def main():
             # ignore the report. Live == the shape was actually sent there again after
             # the verdict that condemned it (2026-07-28).
             bad = [m for m, (g, b) in trust.items() if b and not g
-                   if still_routed(s["tag"], m, rows, verdicts)]
+                   if still_routed(s["tag"], m, rows, grade_rows)]
             if bad:
                 actions.append((0, f"MISROUTED: {s['name']} is being sent to "
                                    f"{', '.join(bad)}, which the ledger scores 0-good. "

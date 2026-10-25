@@ -23,9 +23,13 @@ SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(SKILL, "data", "usage.jsonl")
 DB = os.environ.get("SMITH_VERDICT_DB") or os.path.join(SKILL, "data", "verdicts.db")
 
+# Before 2026-10-25 ts was the PRIMARY KEY, and INSERT OR REPLACE let a grade written in
+# the same second as another overwrite it: the mirror held 328 of the ledger's 411 grades.
+# Rows are keyed by id now, and connect() rebuilds a mirror still on the old schema.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS verdicts (
-  ts          TEXT PRIMARY KEY,
+  id          INTEGER PRIMARY KEY,
+  ts          TEXT NOT NULL,
   verdict     TEXT NOT NULL,
   note        TEXT,
   tag         TEXT,
@@ -38,24 +42,51 @@ CREATE INDEX IF NOT EXISTS idx_verdicts_verdict ON verdicts(verdict);
 """
 
 
+COLS = ("ts", "verdict", "note", "tag", "ref_ts", "ref_model", "ref_script")
+
+
+def _values(rec):
+    return tuple(rec.get(c) for c in COLS)
+
+
 def connect(path=None):
     conn = sqlite3.connect(path or DB)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(verdicts)")]
+    stale = bool(cols) and "id" not in cols
+    if stale:
+        conn.execute("DROP TABLE verdicts")
     conn.executescript(SCHEMA)
+    if stale:
+        _fill(conn)
     return conn
 
 
 def insert(rec, path=None):
-    """Parameterized insert/replace of one verdict record (dict, verdict.py's shape)."""
+    """Add one verdict record (dict, verdict.py's shape) unless that exact grade is already
+    there, which it is when connect() has just rebuilt the mirror from the ledger."""
     conn = connect(path)
     with conn:
         conn.execute(
-            """INSERT OR REPLACE INTO verdicts
-               (ts, verdict, note, tag, ref_ts, ref_model, ref_script)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (rec.get("ts"), rec.get("verdict"), rec.get("note"), rec.get("tag"),
-             rec.get("ref_ts"), rec.get("ref_model"), rec.get("ref_script")),
+            f"""INSERT INTO verdicts ({", ".join(COLS)})
+                SELECT ?, ?, ?, ?, ?, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM verdicts WHERE {" AND ".join(f"{c} IS ?" for c in COLS)})""",
+            _values(rec) + _values(rec),
         )
     conn.close()
+
+
+def _fill(conn):
+    if not os.path.isfile(LEDGER):
+        return
+    with conn, open(LEDGER) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and r.get("script") == "verdict":
+                conn.execute(f"INSERT INTO verdicts ({', '.join(COLS)}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             _values(r))
 
 
 def rebuild(path=None):
@@ -63,21 +94,7 @@ def rebuild(path=None):
     conn = connect(path)
     with conn:
         conn.execute("DELETE FROM verdicts")
-        if os.path.isfile(LEDGER):
-            with open(LEDGER) as f:
-                for line in f:
-                    try:
-                        r = json.loads(line)
-                    except ValueError:
-                        continue
-                    if isinstance(r, dict) and r.get("script") == "verdict":
-                        conn.execute(
-                            """INSERT OR REPLACE INTO verdicts
-                               (ts, verdict, note, tag, ref_ts, ref_model, ref_script)
-                               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                            (r.get("ts"), r.get("verdict"), r.get("note"), r.get("tag"),
-                             r.get("ref_ts"), r.get("ref_model"), r.get("ref_script")),
-                        )
+    _fill(conn)
     n = conn.execute("SELECT COUNT(*) FROM verdicts").fetchone()[0]
     conn.close()
     return n
