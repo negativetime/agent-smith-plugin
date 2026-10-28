@@ -1037,6 +1037,11 @@ def _archive_output(ledger_path, rec, text):
     judge — so 58 runs aged into permanently unreviewable (found 2026-07-28).
     Outputs land in data/outputs/<date>/<ts>-<script>-<model>.txt and the row
     carries the path. SMITH_NO_ARCHIVE=1 opts out (e.g. sensitive content).
+
+    ts has only seconds resolution, so parallel runs of one model can finish in the
+    same second. The file is created exclusively and a taken name gets -2, -3...:
+    with "w" the second run overwrote the first, and both rows named the survivor
+    (found 2026-10-28 by the Lab 06 regrade, which had to set such a run aside).
     """
     if not text or os.environ.get("SMITH_NO_ARCHIVE") in ("1", "true", "yes"):
         return None
@@ -1045,8 +1050,16 @@ def _archive_output(ledger_path, rec, text):
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{ts}-{rec.get('script')}-{rec.get('model')}")
         d = os.path.join(os.path.dirname(ledger_path), "outputs", ts[:10] or "undated")
         os.makedirs(d, exist_ok=True)
-        fp = os.path.join(d, safe[:150] + ".txt")
-        with open(fp, "w") as fh:
+        base = os.path.join(d, safe[:150])
+        fp, n = base + ".txt", 1
+        while True:
+            try:
+                fh = open(fp, "x")
+                break
+            except FileExistsError:
+                n += 1
+                fp = f"{base}-{n}.txt"
+        with fh:
             fh.write(text[:1_000_000])
         return os.path.relpath(fp, os.path.dirname(ledger_path))
     except Exception:
