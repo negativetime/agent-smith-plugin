@@ -3,9 +3,10 @@
 
 A grade is a verdict line written by verdict.py (good, bad or stale). The rule:
 
-  - every good or bad grade counts, including several grades on one run. A run row can
-    stand for more than one answer (runs logged in the same second by the same model share
-    a key), and a second grade on a run is a second judgment, not an overwrite
+  - every good or bad grade counts, including several grades on one run. A run row written
+    before 2026-10-28 can stand for more than one answer (runs logged in the same second by
+    the same model share a key; newer rows carry a run_id), and a second grade on a run is a
+    second judgment, not an overwrite
   - within a route (tag, model) one incident counts once, in run order: one bug graded on
     several runs is one event (20 translate rows with one note, found 2026-08-15)
   - stale is never good or bad, and a grade marked duplicate_of is the same judgment
@@ -22,14 +23,27 @@ import json
 import os
 
 
-def run_key(r):
-    """Identity of a run. ts has only seconds resolution, so script and model join it."""
+def _tuple(r):
     return (r.get("ts"), r.get("script"), r.get("model"))
 
 
+def run_key(r):
+    """Identity of a run: its run_id. Rows written before 2026-10-28 have none, so for them
+    it is ts with script and model, and ts has only seconds resolution: two runs of one model
+    that finished in the same second share that key, and nothing can tell them apart."""
+    return r.get("run_id") or _tuple(r)
+
+
 def ref_key(v):
-    """The run a grade names."""
-    return (v.get("ref_ts"), v.get("ref_script"), v.get("ref_model"))
+    """The run a grade names: its ref_run_id, or for older grades (ts, script, model)."""
+    return v.get("ref_run_id") or (v.get("ref_ts"), v.get("ref_script"), v.get("ref_model"))
+
+
+def grade_of(latest_grades, r):
+    """The grade latest() holds for run r. A grade that names r's run_id; failing that, one
+    written without a run id that names r by (ts, script, model). A grade on a sibling that
+    finished in the same second names the sibling's id, so it is never r's."""
+    return latest_grades.get(run_key(r)) or latest_grades.get(_tuple(r))
 
 
 def incident(v):
@@ -68,6 +82,7 @@ def judged(runs, grades):
     by_key = {}
     for r in runs:
         by_key.setdefault(run_key(r), r)
+        by_key.setdefault(_tuple(r), r)     # a grade written without a run id still finds it
     out = []
     for v in grades:
         if v.get("verdict") not in ("good", "bad") or v.get("duplicate_of"):
@@ -100,7 +115,8 @@ def routes(pairs, route=default_route):
 
 def latest(grades):
     """{run key: last grade}, stale included. For a mark beside a run or the review
-    queue, where the question is "has anyone looked", never for counting."""
+    queue, where the question is "has anyone looked", never for counting. Look a run up
+    with grade_of(), which also finds a grade written without a run id."""
     out = {}
     for v in grades:
         out[ref_key(v)] = v

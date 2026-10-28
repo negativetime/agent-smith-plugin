@@ -8,6 +8,10 @@ After you (Claude or the user) review a delegated output, record the verdict:
     python3 verdict.py bad "wrong API, invented .close() method"
     python3 verdict.py good --model gpt-oss:20b   # most recent run of that model
     python3 verdict.py bad "hallucinated" --script smith_agent
+    python3 verdict.py good --run-id 3f9c2a7b1e04   # one run, when several share a ts
+
+A grade must name one run. When the ts (or "most recent") fits several runs, as parallel
+runs finishing in the same second do, verdict.py refuses and lists their run_ids.
 
 Every `bad` is a ready-made regression test: the task shape that failed should be
 added to your eval harness before delegating that shape again.
@@ -37,6 +41,8 @@ def main():
     ap.add_argument("--script", choices=["gemini", "smith_agent", "transcribe", "jev"],
                     help="target the most recent run of this script")
     ap.add_argument("--ts", help="target the run with this exact ts")
+    ap.add_argument("--run-id", help="target the run with this run_id (rows since 2026-10-28 carry "
+                    "one; use it when several runs share a ts)")
     ap.add_argument("--tag", help="task-shape label for routing weights "
                     "(e.g. classify, draft-code, vision-triage, research, app-build)")
     args = ap.parse_args()
@@ -62,19 +68,39 @@ def main():
                 continue
             runs.append(r)
 
-    target = None
-    for r in reversed(runs):
-        if args.ts and r.get("ts") != args.ts:
-            continue
-        if args.model and r.get("model") != args.model:
-            continue
-        if args.script and r.get("script") != args.script:
-            continue
-        target = r
-        break
-    if not target:
+    cands = [r for r in runs
+             if (not args.run_id or r.get("run_id") == args.run_id)
+             and (not args.ts or r.get("ts") == args.ts)
+             and (not args.model or r.get("model") == args.model)
+             and (not args.script or r.get("script") == args.script)]
+    if not cands:
         print("ERROR: no matching run found.", file=sys.stderr)
         sys.exit(1)
+    target = cands[-1]
+
+    # ---- one run, not one second -------------------------------------------
+    # ts has only seconds resolution. Parallel runs finishing in the same second all fit
+    # --ts, and "most recent" picked whichever was written last, so a grade could land on
+    # a sibling of the run that was read (found 2026-10-28: the Lab 06 regrade could not
+    # tell which of two same-second runs a grade was for). Rows since then carry a
+    # run_id: refuse, and list them, rather than guess.
+    same = [target] if args.run_id else [r for r in cands if r.get("ts") == target.get("ts")]
+    by_id = all(r.get("run_id") for r in same)
+    if len(same) > 1 and (by_id or len({(r.get("script"), r.get("model")) for r in same}) > 1):
+        print(f"REFUSED: {len(same)} runs fit ({target.get('ts')}), and a grade must name "
+              f"one of them:", file=sys.stderr)
+        for r in same:
+            what = " ".join((r.get("purpose") or r.get("task") or "").split())[:60]
+            pick = (f"--run-id {r['run_id']}" if by_id
+                    else f"--script {r.get('script')} --model {r.get('model')}")
+            print(f"  {pick}  {r.get('script')}:{r.get('model')}  [{r.get('tag') or 'untagged'}]  "
+                  f"{what}" + (f"  {r['output_file']}" if r.get("output_file") else ""), file=sys.stderr)
+        print("  Re-run naming the run you read.", file=sys.stderr)
+        sys.exit(1)
+    if len(same) > 1:
+        print(f"warning: {len(same)} runs of {target.get('script')}:{target.get('model')} finished "
+              f"at {target.get('ts')} and predate run ids, so nothing can tell them apart; the "
+              f"grade names all of them.", file=sys.stderr)
 
     # ---- stale-target guard ------------------------------------------------
     # `--model` matches the ledger's model field EXACTLY, and the ledger stores
@@ -84,7 +110,7 @@ def main():
     # literal string, and the verdict lands on the wrong route. Measured
     # 2026-09-07: `--model pro` filed a fresh doc-format verdict onto a run from
     # 2026-07-20, seven weeks stale. Refuse rather than corrupt the weights.
-    if not args.ts:
+    if not args.ts and not args.run_id:
         try:
             age = (datetime.datetime.now()
                    - datetime.datetime.fromisoformat(target.get("ts", ""))).days
@@ -105,6 +131,8 @@ def main():
            "script": "verdict", "verdict": args.verdict, "note": args.note,
            "ref_ts": target.get("ts"), "ref_model": target.get("model"),
            "ref_script": target.get("script")}
+    if target.get("run_id"):
+        rec["ref_run_id"] = target["run_id"]
     if args.tag:
         rec["tag"] = args.tag
 
@@ -146,6 +174,7 @@ def main():
         print(f"warning: verdicts.db insert failed ({e}); jsonl ledger is unaffected",
               file=sys.stderr)
     desc = (f"{target.get('script')}:{target.get('model')} @ {target.get('ts')}"
+            + (f" [{target['run_id']}]" if target.get("run_id") else "")
             + (f" — {target.get('task', '')[:60]}" if target.get("task") else ""))
     print(f"marked {args.verdict.upper()}: {desc}"
           + (f"  [tag: {args.tag}]" if args.tag else "")

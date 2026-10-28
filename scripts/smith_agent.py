@@ -750,7 +750,11 @@ def _ledger(rec):
     Progress tracking only — must never affect the run, so it swallows everything."""
     try:
         import datetime
-        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        import uuid
+        # run_id names this row alone: ts has only seconds resolution, so parallel runs of one
+        # model can share ts, script and model, and verdict.py --run-id grades one of them.
+        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+               "run_id": uuid.uuid4().hex[:12], **rec}
         path = os.environ.get("SMITH_LEDGER") or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "data", "usage.jsonl")

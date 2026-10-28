@@ -11,7 +11,6 @@ import os
 from collections import Counter
 
 import grades
-from grades import run_key
 
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "usage.jsonl")
@@ -97,9 +96,9 @@ def main():
         # runs can never be verdicted, so counting them made the queue look hopeless.
         reviewable = [r for r in rows if is_reviewable(r)]
         pending = sum(1 for r in reviewable
-                      if not (verdicts.get(run_key(r)) or {}).get("verdict"))
+                      if not (grades.grade_of(verdicts, r) or {}).get("verdict"))
         stale = sum(1 for r in rows
-                    if (verdicts.get(run_key(r)) or {}).get("verdict") == "stale")
+                    if (grades.grade_of(verdicts, r) or {}).get("verdict") == "stale")
         unreviewable = len(rows) - len(reviewable)
         print(f"verified: {len(good)} good, {len(bad)} bad grades "
               f"({rate:.0%} quality on reviewed), {pending} awaiting verdict"
@@ -124,7 +123,7 @@ def main():
             if tag == "(untagged)":
                 continue
             judged = [r for r in rows if (r.get("tag") == tag)
-                      and (verdicts.get(run_key(r)) or {}).get("verdict")]
+                      and (grades.grade_of(verdicts, r) or {}).get("verdict")]
             note = f"  ({len(judged)} reviewed)" if judged else ""
             print(f"  {n:4}  {tag}{note}")
     by_project = Counter(r.get("project") for r in rows if r.get("project"))
@@ -179,7 +178,7 @@ def main():
                   f"— {v.get('note', '(no note)')[:90]}")
     legacy_hidden = 0
     if args.unreviewed:
-        shown = [r for r in rows if not (verdicts.get(run_key(r)) or {}).get("verdict")]
+        shown = [r for r in rows if not (grades.grade_of(verdicts, r) or {}).get("verdict")]
         # Rows written before the 2026-07-18 purpose field carry no subject line, so
         # they can't be judged after the fact — the prompt was never stored and there
         # is nothing to reconstruct it from. Showing 800 of them buries the handful
@@ -200,7 +199,7 @@ def main():
         else f"last {min(args.last, len(shown))} runs"
     print(f"\n{heading}:")
     for r in shown[-args.last:]:
-        v = verdicts.get(run_key(r))
+        v = grades.grade_of(verdicts, r)
         mark = {"good": " ✓", "bad": " ✗"}.get((v or {}).get("verdict"), "")
         if r.get("script") == "smith_agent":
             desc = (f"{'PASS' if r.get('finished') else 'fail'} "

@@ -43,7 +43,11 @@ def _ledger(rec):
     """Mirror gemini.py's ledger so fleet usage stays in one place."""
     try:
         import datetime
-        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        import uuid
+        # run_id names this row alone: ts has only seconds resolution, so parallel runs of one
+        # model can share ts, script and model, and verdict.py --run-id grades one of them.
+        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+               "run_id": uuid.uuid4().hex[:12], **rec}
         rec.setdefault("project", os.path.basename(os.getcwd()) or None)
         path = os.environ.get("SMITH_LEDGER") or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

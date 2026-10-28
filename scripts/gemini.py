@@ -1005,27 +1005,18 @@ def _unreviewed_count(path):
     them turned the nag into noise: it read 859 when the real queue was 58.
     Swallows all errors — this is a nag, never allowed to break a real run."""
     try:
-        rows, verdicted = [], set()
-        with open(path) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(r, dict):
-                    continue
-                if r.get("script") == "verdict":
-                    verdicted.add((r.get("ref_ts"), r.get("ref_script"), r.get("ref_model")))
-                    continue
-                # Gym runs stay IN: an eval is not fleet usage, but it is still
-                # gradeable evidence, so usage_report keeps it in the review queue.
-                if r.get("script") in ("witness", "cascade-attempt") or r.get("tag") == "smoke":
-                    continue
-                if not (r.get("purpose") or r.get("task") or r.get("tag")):
-                    continue
-                rows.append(r)
-        return sum(1 for r in rows
-                   if (r.get("ts"), r.get("script"), r.get("model")) not in verdicted)
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import grades  # the run identity verdict.py and the reports use (run_id, or ts+script+model)
+        runs, grade_rows, _ = grades.read(path)
+        seen = grades.latest(grade_rows)
+        # Gym runs stay IN: an eval is not fleet usage, but it is still
+        # gradeable evidence, so usage_report keeps it in the review queue.
+        return sum(1 for r in runs
+                   if r.get("script") != "cascade-attempt" and r.get("tag") != "smoke"
+                   and (r.get("purpose") or r.get("task") or r.get("tag"))
+                   and grades.grade_of(seen, r) is None)
     except Exception:
         return None
 
@@ -1117,7 +1108,11 @@ def _ledger(rec, output=None):
         pass
     try:
         import datetime
-        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
+        import uuid
+        # run_id names this row alone: ts has only seconds resolution, so parallel runs of one
+        # model can share ts, script and model, and verdict.py --run-id grades one of them.
+        rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+               "run_id": uuid.uuid4().hex[:12], **rec}
         rec.setdefault("project", os.path.basename(os.getcwd()) or None)
         path = os.environ.get("SMITH_LEDGER") or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
