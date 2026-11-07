@@ -722,7 +722,16 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   grade, not a proof). It also flags a redirect to a domain-for-sale page, and refuses non-public
   addresses, since the URLs come from model output. An answer that cites only Gemini grounding
   redirects (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`) cannot be proven this way:
-  they expire (exit 3). **Doc-format:** recompute the length or diff the note names.
+  they expire (exit 3). **Doc-format:** `python3 scripts/proof_doc.py doc.html --source draft.md >
+  proof.txt` checks that the `<style>` block is byte-identical to the house shell's (parsed with a
+  real HTML parser: the shell's own header comment contains the text `<style>`), the title and
+  placeholders, that the page is complete, self-contained and has nothing outside `</html>`, and
+  with `--source` that every figure, word and heading of the draft is in the page, in order, with no
+  invented text. Exit 0 only when everything passed AND the draft was given; exit 3 means the
+  structure passed but content parity was NOT checked, which is a partial proof, not a full one.
+  **Run it at grading time, while the draft exists**: over the 10 goods in the 2026-11-07 window 8
+  drafts were lost (deleted, or piped on stdin and never saved) and the other 2 had changed since,
+  so a retroactive parity proof was not obtainable. Save the draft beside the output.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every
