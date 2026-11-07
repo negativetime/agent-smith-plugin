@@ -1083,7 +1083,111 @@ def _note_reported_model(resp):
         _REPORTED_MODEL = None
 
 
-def _ledger(rec, output=None):
+# ---- --json: keep the first complete JSON value ------------------------------------------------
+# Measured 2026-11-07 on 7,994 archived JSON-looking answers: classify @ glm-5.3 returned 116 of
+# 2,755 that did not parse, and the first reading of that number was WRONG. 81 are an intentional
+# row format (`[0,"ADS","H"],[1,"PERSONAL","H"],...`, valid once wrapped in [ ]); "keep the first
+# value" would have kept ONE row and deleted the rest. Only 10 are a complete object followed by a
+# corrupted fragment of another answer (`ame plug-ins, and sessions sounding exactly the same..."}`);
+# 23 have unescaped quotes inside a string and 2 are truncated. So this trims only when what
+# follows the first complete object/array contains no other JSON value, and touches nothing else.
+# It never fishes a value out of prose and never completes a truncated one.
+_JSON_DEC = json.JSONDecoder()
+JSON_DROP_PREVIEW = 160     # chars of the dropped text kept in the ledger row
+JSON_SCAN_MAX = 200         # bracket positions checked for a SECOND json value before assuming one
+
+
+def _fence_inner(t):
+    m = re.match(r"^```[A-Za-z0-9_-]*[ \t]*\n(.*?)\n?```\s*$", t, re.S)
+    return m.group(1) if m else None
+
+
+def _has_json_value(rest):
+    """True if ANOTHER complete JSON object/array starts anywhere in `rest`. Conservative: more
+    than JSON_SCAN_MAX candidate positions counts as yes, so a doubt never deletes data (81 of the
+    measured cases were rows in a row, and 3 were a first object followed by 27 KB of further
+    valid objects)."""
+    for n, m in enumerate(re.finditer(r"[\{\[]", rest), 1):
+        if n > JSON_SCAN_MAX:
+            return True
+        try:
+            val, _ = _JSON_DEC.raw_decode(rest, m.start())
+        except ValueError:
+            continue
+        if isinstance(val, (dict, list)):
+            return True
+    return False
+
+
+def _json_pass(text, want, trim):
+    """(text to deliver, ledger fields) for a single-run answer.
+
+    json_status is one of
+      ok         the whole answer parses as JSON
+      fenced     it parses once a code fence is peeled off; delivered UNCHANGED (callers match fences)
+      trimmed    a complete object/array opens the answer and non-JSON text follows: only the value
+                 is delivered (needs want and trim)
+      trimmable  the same, but delivered unchanged because --json was not given (or the switch is off)
+      multiple   a complete value is followed by ANOTHER valid JSON value: never trimmed
+      malformed  anything else (truncated, broken quoting, prose): delivered unchanged
+    Runs that did not ask for JSON and do not look like it get no fields at all. json_flag says
+    whether --json/--schema was given, so the ledger can show which callers would benefit."""
+    t = (text or "").strip()
+    flag = {"json_flag": bool(want)}
+    if not t:
+        return text, ({"json_status": "malformed", **flag} if want else {})
+    starts = t.startswith(("{", "["))
+    try:
+        json.loads(t)
+        return text, ({"json_status": "ok", **flag} if (want or starts) else {})
+    except ValueError:
+        pass
+    inner = _fence_inner(t) if t.startswith("```") else None
+    if inner is not None:
+        try:
+            json.loads(inner)
+            return text, {"json_status": "fenced", **flag}
+        except ValueError:
+            pass
+    if starts:
+        try:
+            val, end = _JSON_DEC.raw_decode(t)
+        except ValueError:
+            return text, {"json_status": "malformed", **flag}
+        rest = t[end:].strip()
+        if isinstance(val, (dict, list)) and rest:
+            if _has_json_value(rest):
+                return text, {"json_status": "multiple", **flag}
+            info = {"json_dropped_chars": len(rest), "json_dropped": rest[:JSON_DROP_PREVIEW], **flag}
+            if want and trim:
+                return t[:end], {"json_status": "trimmed", **info}
+            return text, {"json_status": "trimmable", **info}
+    return text, ({"json_status": "malformed", **flag} if (want or starts) else {})
+
+
+def _json_deliver(text, args):
+    """(text to print and archive, extra ledger fields, the raw text when it was trimmed else None).
+    SMITH_JSON_TRIM=0 turns the trim off; the status is still recorded."""
+    want = bool(getattr(args, "json", False) or getattr(args, "schema", None))
+    out, info = _json_pass(text, want, os.environ.get("SMITH_JSON_TRIM", "1") != "0")
+    st = info.get("json_status")
+    if st == "trimmed":
+        log(f"[json] kept the first complete JSON value and dropped {info['json_dropped_chars']} chars "
+            f"of non-JSON text after it ({info['json_dropped'][:60]!r}). The raw answer is archived "
+            f"as output_file_raw.")
+    elif st == "trimmable":
+        log(f"[json] note: {info['json_dropped_chars']} chars of non-JSON text follow a complete JSON "
+            f"value; delivered unchanged (--json would drop them).")
+    elif want and st == "multiple":
+        log("[json] note: the answer holds several JSON values in a row (rows without outer "
+            "brackets, or a second object); delivered unchanged.")
+    elif want and st == "malformed":
+        log("[json] WARNING: --json was given but the answer is not valid JSON (truncated, broken "
+            "quoting or prose); delivered unchanged.")
+    return out, info, (text if st == "trimmed" else None)
+
+
+def _ledger(rec, output=None, raw_output=None):
     """Append one usage record to the skill's data/usage.jsonl (SMITH_LEDGER overrides).
 
     The `model` field is the model that ACTUALLY RAN whenever the endpoint reports one —
@@ -1121,6 +1225,10 @@ def _ledger(rec, output=None):
         saved = _archive_output(path, rec, output)
         if saved:
             rec["output_file"] = saved
+        if raw_output:      # the answer as the model returned it, when --json delivered less of it
+            saved_raw = _archive_output(path, dict(rec, script=f"{rec.get('script')}-raw"), raw_output)
+            if saved_raw:
+                rec["output_file_raw"] = saved_raw
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
         # Only nag on rows that are themselves reviewable — a witness/verdict row
@@ -2144,6 +2252,7 @@ def main():
         else:
             text = call_gemini_cli(prompt, sys_eff, args.temperature, args.model,
                                    preflight=args.preflight)
+        text, jinfo, raw_text = _json_deliver(text, args)
         print(text)
         sys.stdout.flush()
         _ledger({"script": "gemini", "backend": args.backend, "model": model_eff,
@@ -2152,8 +2261,9 @@ def main():
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "images": len(images) or None, "tailored": tailored or None,
                  "search": bool(args.search) or None, "think": args.think,
+                 **jinfo,
                  "seconds": round(time.time() - t0, 1), "status": "ok"},
-                output=text)
+                output=text, raw_output=raw_text)
         if args.backend == "ollama":
             _witness(prompt, sys_eff, model_eff, text, images, "oneshot")
         return
@@ -2223,14 +2333,16 @@ def main():
         text = call_openai_compat(prompt, sys_eff, args.temperature, "glm-5.3",
                                   args.max_tokens,
                                   "https://api.z.ai/api/coding/paas/v4", search=True)
+        text, jinfo, raw_text = _json_deliver(text, args)
         print(text)
         sys.stdout.flush()
         _ledger({"script": "gemini", "backend": "openai", "model": "glm-5.3",
                  "purpose": _subject(prompt, args.purpose), "tag": args.tag,
                  "prompt_chars": len(prompt), "out_chars": len(text),
                  "search": True, "fallback_from": "gemini-quota-exhausted",
+                 **jinfo,
                  "seconds": round(time.time() - t0, 1), "status": "ok"},
-                output=text)
+                output=text, raw_output=raw_text)
         return
 
     fb = resp.get("promptFeedback", {})
@@ -2244,6 +2356,7 @@ def main():
         sys.exit(1)
     cand = cands[0]
     text = extract_text(cand)
+    text, jinfo, raw_text = _json_deliver(text, args)
     print(text)
     sys.stdout.flush()
 
@@ -2261,8 +2374,9 @@ def main():
              "tokens_out": u.get("candidatesTokenCount"),
              "search": bool(args.search), "files": len(args.file),
              "tailored": tailored or None,
+             **jinfo,
              "seconds": round(time.time() - t0, 1), "status": "ok"},
-            output=text)
+            output=text, raw_output=raw_text)
     fr = cand.get("finishReason")
     if fr and fr != "STOP":
         log(f"finishReason: {fr}  (output may be truncated/partial)")

@@ -156,6 +156,7 @@ LICENSE             apache 2.0
 | `SMITH_NO_ARCHIVE=1` | do not archive outputs |
 | `SMITH_NO_FALLBACK=1` | do not reroute research when gemini hits a monthly cap |
 | `SMITH_NUDGE_AFTER`, `SMITH_NUDGE_EVERY` | hook cadence |
+| `SMITH_JSON_TRIM` | `0` stops `--json` dropping non-JSON text that follows a complete JSON value (the status is still logged; default on) |
 | `SMITH_VERIFY_GATE` | `0` stops smith_agent running the contract's `verify` command itself at finish (default on) |
 | `SMITH_EVIDENCE_NEEDED` | proofs a streak of 10 needs for spot-check in research, doc-format, code-draft, app-build (default 3, `0` = off) |
 

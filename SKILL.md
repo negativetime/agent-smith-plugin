@@ -124,6 +124,21 @@ Windows: same flags, `python` launcher, `Get-Content` for stdin.
 `--preflight` (gemini-cli syntax check) · `--list-models` · `--no-tailor` (below).
 API internals: [references/gemini-api.md](references/gemini-api.md).
 
+**`--json` keeps the first complete JSON value (2026-11-07).** With `--json` or `--schema`, a
+single-run answer that opens with one complete object/array followed by NON-JSON text (measured:
+a corrupted fragment of another answer) is delivered as that value alone. The raw answer is
+archived as `output_file_raw`, stderr says what was dropped, and the ledger row records
+`json_status`, `json_flag`, `json_dropped_chars` and `json_dropped` (its first 160 chars).
+It **never** trims when another JSON value follows (rows in a row such as
+`[0,"ADS","H"],[1,"PERSONAL","H"]`, or a second object), never strips a code fence, never
+completes truncated JSON and never pulls a value out of prose. `json_status`: `ok` · `fenced`
+(valid inside a fence, delivered unchanged) · `trimmed` · `trimmable` (it would have trimmed, but
+`--json` was not given) · `multiple` · `malformed`. A run that asked for no JSON and does not look
+like JSON gets no fields. `json_flag` shows which callers pass `--json`. Not covered: `--batch`
+(per-file output, and `--consensus` compares raw text) and `--cascade` (its own gate). On the
+ollama and OpenAI-compatible backends `--json` does not change the request (only the Gemini API
+honours it), so the trim is all it does there. `SMITH_JSON_TRIM=0` keeps the status, stops the trim.
+
 **Per-model prompt tailoring (2026-07-26).** `--system` carries TASK framing (role/style);
 `gemini.py` separately auto-appends a MODEL framing clause — a known, measured failure mode
 for whichever model is actually resolved (e.g. gpt-oss:20b → strip reasoning-residue dead
