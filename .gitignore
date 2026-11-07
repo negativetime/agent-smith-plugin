@@ -9,3 +9,4 @@ data/ollama_usage.jsonl
 
 # repo-mode worktrees + settled patches (scratch, per-run)
 data/worktrees/
+data/evidence/

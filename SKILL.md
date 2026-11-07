@@ -75,6 +75,11 @@ Full recipes: [references/playbooks.md](references/playbooks.md).
 4. **Finish** — integrate yourself; send focused revision prompts rather than redoing.
 5. **Report + record the verdict** — tell the user what you delegated and verified, then:
    `python3 "$SKILL/scripts/verdict.py" good` (or `bad "why"`). One line, every review.
+   When a check backs the grade, attach it: `--evidence FILE` (or `-` for stdin) takes the
+   pytest output, the list of URLs that resolved, the length or diff check. It is copied to
+   `data/evidence/` (git-ignored) with its sha256; `verdict.py audit` re-checks every proof
+   and exits 1 on a deleted or edited one. Match the proof to the shape, and attach it most
+   where a `good` is lifting a route toward light review. Empty files are refused.
    ⚠ With other sessions running, a bare verdict grades the newest run of ANY session
    (2026-10-18: one landed on another session's classify run). Pass `--run-id` (or `--ts`)
    from your own run's ledger row; `grep '<your --purpose>' data/usage.jsonl` finds it. When
@@ -666,7 +671,7 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   is the review queue — coverage was ~4% (799/887 unverdicted), so the routing weights rest on
   a thin sample; verdict a few whenever you're already in the ledger.
 - **Verdicts:** `ok` = completed, not correct. After review:
-  `verdict.py good|bad|stale "why" [--tag TASKTYPE] [--model M] [--script S]`. Tags feed the
+  `verdict.py good|bad|stale "why" [--tag TASKTYPE] [--model M] [--script S] [--evidence FILE]`. Tags feed the
   report's **hebbian routing weights**: per (task-shape, model) quality + streak → review
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears

@@ -26,7 +26,9 @@ DB = os.environ.get("SMITH_VERDICT_DB") or os.path.join(SKILL, "data", "verdicts
 # Before 2026-10-25 ts was the PRIMARY KEY, and INSERT OR REPLACE let a grade written in
 # the same second as another overwrite it: the mirror held 328 of the ledger's 411 grades.
 # Rows are keyed by id now, and connect() rebuilds a mirror still on an old schema (no id, or
-# no ref_run_id: grades name a run by its run_id since 2026-10-28).
+# no ref_run_id: grades name a run by its run_id since 2026-10-28, or no evidence_file:
+# a grade can carry the proof that backs it since 2026-11-07). A rebuild loses nothing,
+# the ledger is the source.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS verdicts (
   id          INTEGER PRIMARY KEY,
@@ -37,14 +39,18 @@ CREATE TABLE IF NOT EXISTS verdicts (
   ref_ts      TEXT,
   ref_model   TEXT,
   ref_script  TEXT,
-  ref_run_id  TEXT
+  ref_run_id  TEXT,
+  evidence_file   TEXT,
+  evidence_sha256 TEXT,
+  evidence_bytes  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_tag ON verdicts(tag);
 CREATE INDEX IF NOT EXISTS idx_verdicts_verdict ON verdicts(verdict);
 """
 
 
-COLS = ("ts", "verdict", "note", "tag", "ref_ts", "ref_model", "ref_script", "ref_run_id")
+COLS = ("ts", "verdict", "note", "tag", "ref_ts", "ref_model", "ref_script", "ref_run_id",
+        "evidence_file", "evidence_sha256", "evidence_bytes")
 _MARKS = ", ".join("?" for _ in COLS)
 
 
@@ -55,7 +61,7 @@ def _values(rec):
 def connect(path=None):
     conn = sqlite3.connect(path or DB)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(verdicts)")]
-    stale = bool(cols) and ("id" not in cols or "ref_run_id" not in cols)
+    stale = bool(cols) and any(c not in cols for c in ("id", "ref_run_id", "evidence_file"))
     if stale:
         conn.execute("DROP TABLE verdicts")
     conn.executescript(SCHEMA)

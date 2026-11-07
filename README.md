@@ -66,6 +66,7 @@ then review the output and close the loop:
 ```bash
 python3 "$SKILL/scripts/verdict.py" good --tag research --model pro
 python3 "$SKILL/scripts/verdict.py" bad "invented an api that does not exist" --tag code-draft --model gpt-oss:20b
+python3 "$SKILL/scripts/verdict.py" good --tag doc-format --evidence length_check.txt   # attach the proof
 ```
 
 `--tag` is required. an untagged call exits 2 before spending anything. that is deliberate: without tags the ledger could not group runs by shape, so nothing could be reviewed or routed on purpose. use `--tag smoke` for throwaway checks so they stay out of the review queue.
@@ -79,6 +80,8 @@ python3 "$SKILL/scripts/verdict.py" bad "invented an api that does not exist" --
 5. record a verdict.
 
 a `good` verdict strengthens a (shape, model) route. a `bad` one resets its streak and should become a regression task in the gym before that shape is delegated to that model again. at a streak of 5 the route earns light review, at 10 spot-check.
+
+a grade is a tag and a note. `--evidence FILE` (or `-` for stdin) attaches the artifact behind it: the test output, the urls that resolved, a length or diff check. it is copied to `data/evidence/` (git ignores it, a proof can hold private output) with its sha256, and `verdict.py audit` re-checks every one, so a proof that was deleted or edited shows up instead of quietly standing. an empty file, a directory or a missing path is refused.
 
 ## backends
 
@@ -118,7 +121,7 @@ the exact fleet and lanes in `SKILL.md` are the author's, earned on the author's
 | `transcribe.py` | local audio to text |
 | `embed.py` | embeddings and reranking on workers ai |
 | `usage_report.py` | ledger aggregates, routing weights, `--unreviewed` review queue |
-| `verdict.py` | `good` / `bad` / `stale` after review |
+| `verdict.py` | `good` / `bad` / `stale` after review; `--evidence` attaches the proof, `audit` re-checks it |
 | `verdict_db.py` | sqlite mirror of the verdict trail for non-python consumers |
 | `gap_report.py` | unused and misrouted capacity, ledger joined against claude transcripts |
 | `fleet_check.py` | model digests vs an accepted baseline |
