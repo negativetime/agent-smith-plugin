@@ -711,6 +711,12 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   `SMITH_EVIDENCE_NEEDED=N` changes the 3; `0` turns the rule off.
   A grade written without `--tag` counts toward the tag of the run it grades (2026-11-07);
   its own `--tag`, when given, wins.
+  **To back an EXISTING good with a proof**, re-grade that run with the IDENTICAL note and
+  `--evidence`: `verdict.py good "<same note>" --tag T --script gemini --model M --ts <run ts>
+  --evidence FILE`. It is recorded as the same incident, so the route's counts do not change
+  and the proof now holds (verified on a ledger copy: both held routes returned to spot-check
+  after 3 re-grades each). Runs older than 2026-10-28 have no run_id, hence `--ts`. The proof
+  has to come from a real check of that answer (resolve its URLs; recompute the length or diff).
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every
