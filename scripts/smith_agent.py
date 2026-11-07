@@ -49,6 +49,12 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 READ_LIMIT = 16000     # chars of a file the model may see at once
 OUT_LIMIT = 6000       # chars of stdout/stderr per command
 CMD_TIMEOUT = 90       # seconds per run_command
+# The contract's `verify` command is run by the HARNESS when the model calls finish (2026-11-07).
+# Until then it was only an instruction to the model: a run that never ran it, ran it and saw it
+# fail, or ran something that tested nothing all returned the same summary.
+VERIFY_TIMEOUT = 300   # seconds; the model's own run_command gets CMD_TIMEOUT
+VERIFY_BOUNCES = 2     # failing finish attempts sent back before the run is accepted UNVERIFIED
+VERIFY_TAIL = 1200     # chars of the verify output kept in the summary
 DENY = ("sudo", "rm -rf /", "shutdown", "reboot", "diskutil", "> /dev/")
 
 # Repo mode only: commands that reach OUTSIDE the worktree, or publish. Regex with word
@@ -319,6 +325,34 @@ def t_run_command(workdir, command):
     out = (p.stdout or "")[:OUT_LIMIT]
     err = (p.stderr or "")[:OUT_LIMIT]
     return f"exit code: {p.returncode}\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
+
+
+
+VERIFY_REFUSED = (
+    "[verify gate] finish REFUSED: the contract's verify command did not pass.\n"
+    "command: {cmd}\n{why}\n--- output (tail) ---\n{tail}\n"
+    "Fix the cause, run the command yourself to confirm, then call finish again. "
+    "{left} attempt(s) left before this run is recorded as UNVERIFIED.")
+
+
+def run_verify(workdir, command):
+    """Run the contract's verify command ourselves, in the sandbox the model worked in, and
+    report what really happened. Its author wrote it, not the model, so the model-facing DENY
+    lists do not apply; what does apply is a timeout and a real exit code. rc is None when it
+    timed out or could not start, which is a failure, never a pass."""
+    t0 = time.time()
+    timed_out = False
+    try:
+        p = subprocess.run(["/bin/bash", "-c", command], cwd=workdir, capture_output=True,
+                           text=True, errors="replace", timeout=VERIFY_TIMEOUT)
+        rc = p.returncode
+        out = (p.stdout or "") + (("\n" + p.stderr) if p.stderr else "")
+    except subprocess.TimeoutExpired:
+        rc, timed_out, out = None, True, f"timed out after {VERIFY_TIMEOUT}s"
+    except OSError as exc:
+        rc, out = None, f"could not run: {exc}"
+    return {"rc": rc, "seconds": round(time.time() - t0, 1), "timed_out": timed_out,
+            "tail": out.strip()[-VERIFY_TAIL:]}
 
 
 # ---------------------------------------------------------------- explore tools
@@ -818,7 +852,11 @@ def parse_contract(path):
         try:
             meta[k] = json.loads(v)
         except ValueError:
-            meta[k] = v.strip("'\"")
+            # Unwrap ONE quote pair that wraps the whole value (`model: 'glm-4.6'`) and nothing
+            # else. Stripping a quote off either END mangled a command like
+            # `grep -q "x" f && echo "ok"` into an unterminated string, and `'a' && 'b'` into
+            # `a' && 'b`. Found 2026-11-07, when the harness first ran `verify` itself.
+            meta[k] = v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"" and v.count(v[0]) == 2 else v
     body = raw[m.end():].strip()
     if not body:
         raise RepoError(f"{path}: contract has no task body after the front matter")
@@ -1241,9 +1279,17 @@ def main():
         else:
             with open(args.prompt_file) as f:
                 task = f.read()
+    verify_cmd = None
     if meta.get("verify"):
+        gated = not EXPLORE and os.environ.get("SMITH_VERIFY_GATE", "1") != "0"
+        if gated:
+            verify_cmd = str(meta["verify"])
         task += ("\n\nVerify your change by running exactly this command, and do not call "
-                 "finish until it passes:\n    " + meta["verify"])
+                 "finish until it passes:\n    " + str(meta["verify"]))
+        if gated:
+            task += (f"\nThe harness runs this command itself when you call finish. If it fails "
+                     f"you are sent back to fix it (at most {VERIFY_BOUNCES} times); after that "
+                     f"the run is recorded as UNVERIFIED.")
     if not args.repo and (args.write_scope or args.read_scope or args.carry_ignored):
         ap.error("--write-scope/--read-scope/--carry-ignored only apply to --repo")
     if args.repo and not args.write_scope:
@@ -1328,6 +1374,7 @@ def main():
     t0 = time.time()
     finished, stop = False, "max_turns"
     turn, nudged, finish_bounced = 0, False, False
+    verify_bounces, last_verify = 0, None
     native_ok = True  # tools= flag; flips False after an ollama tool-parse 500 -> fallback
     did_write = False  # gates `finished`: a real write_file must succeed this session
     report = ""        # explore mode: the answer, from finish(report=...) or a prose reply
@@ -1424,8 +1471,22 @@ def main():
                 result = FINISH_GATE
                 log("finish_gate", {"summary": raw_args.get("summary", "")})
             elif name == "finish":
-                finished, stop = True, "finish"
-                result = "session ended"
+                refused = False
+                if verify_cmd:
+                    last_verify = run_verify(workdir, verify_cmd)
+                    log("verify_gate", {"attempt": verify_bounces + 1, "rc": last_verify["rc"],
+                                        "timed_out": last_verify["timed_out"]})
+                    if last_verify["rc"] != 0 and verify_bounces < VERIFY_BOUNCES:
+                        verify_bounces += 1
+                        refused = True
+                        result = VERIFY_REFUSED.format(
+                            cmd=verify_cmd, tail=last_verify["tail"] or "(no output)",
+                            why=("it timed out" if last_verify["timed_out"] else
+                                 f"exit code: {last_verify['rc']}"),
+                            left=VERIFY_BOUNCES - verify_bounces)
+                if not refused:
+                    finished, stop = True, "finish"
+                    result = "session ended"
                 if EXPLORE:
                     report = str(raw_args.get("report") or raw_args.get("summary") or "")
             elif EXPLORE and name in ("write_file", "run_command"):
@@ -1497,8 +1558,19 @@ def main():
         really_finished = (finished or stop == "no_tools") and did_write
         if not really_finished and stop in ("finish", "no_tools"):
             stop = f"{stop}_no_write"
+    if verify_cmd and really_finished and last_verify is None:
+        # A prose give-up that still counts as finished never reached the finish branch.
+        last_verify = run_verify(workdir, verify_cmd)
+        log("verify_gate", {"attempt": "end", "rc": last_verify["rc"],
+                            "timed_out": last_verify["timed_out"]})
     summary = {"finished": really_finished, "turns": turn,
                "seconds": round(time.time() - t0, 1), "stop": stop}
+    if verify_cmd:
+        # True / False once the harness ran it; None when the run ended without a finish
+        # attempt, so nothing was verified either way. No contract verify: no keys at all.
+        summary["verified"] = None if last_verify is None else last_verify["rc"] == 0
+        if last_verify is not None:
+            summary["verify"] = {**last_verify, "bounces": verify_bounces}
     if EXPLORE:
         # A run's identity everywhere downstream is (ts, script, model), and parallel
         # fan-out children finish in the same second (measured: 3 of 5 on the first live
@@ -1551,6 +1623,9 @@ def main():
         print(report, file=sys.stderr)
     print(json.dumps(summary))
     led = dict(summary)
+    if "verify" in led:                       # one line per run: the code and the count, not the tail
+        v = led.pop("verify")
+        led["verify_rc"], led["verify_bounces"] = v["rc"], v["bounces"]
     # Keep the ledger one-line-per-run: counts, not the whole file list.
     if REPO_MODE:
         led["files"] = len(summary["files"])

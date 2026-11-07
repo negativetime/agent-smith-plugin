@@ -565,6 +565,19 @@ malice: a model that wanted out of the worktree could get out.
 - Build artifacts the verify command itself creates (`__pycache__`, `*.pyc`,
   `.pytest_cache`, `.DS_Store`) are unstaged rather than failed, and **reported** as
   `artifacts` in the summary. Nothing is silently dropped.
+- **The harness runs `verify` itself** (2026-11-07; until then it was only an instruction to
+  the model, and a run that never ran it, saw it fail, or ran something that tested nothing all
+  returned the same summary). When the model calls `finish`, smith_agent runs the contract's
+  `verify` in the worktree and reads the real exit code. A failure sends the model back with the
+  output (twice at most); after that the run is accepted but recorded as UNVERIFIED. **Read
+  `verified` in the summary before trusting a draft**: `true` (exit 0), `false` (nonzero, timed
+  out after 300 s, or could not start), `null` (the run ended with no finish attempt, so nothing
+  ran). `verify` holds `rc`, `seconds`, `timed_out`, `bounces` and the last 1200 characters of
+  output; the ledger row carries `verified`, `verify_rc`, `verify_bounces`. A prose-only give-up
+  that still counts as finished is verified once at the end. Exit 0 proves only that the command
+  passed, and a command that tests nothing also exits 0: an EMPTY `verify.tail` on a test command
+  is the tell. No `verify:` in the contract means no new keys; `--explore` is not gated.
+  `SMITH_VERIFY_GATE=0` restores the instruction-only behaviour.
 - `--carry-ignored PATH` does `cp -R`, never a symlink: symlinking gitignored assets into a
   worktree once left the SOURCE tree holding self-referential symlinks after
   `git worktree remove`. Teardown re-checks the source with `ls -la` (never `du`, which

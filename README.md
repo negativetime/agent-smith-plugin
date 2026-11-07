@@ -13,7 +13,7 @@ the skill exists to make that the default rather than something you remember to 
 ## what it does
 
 - `gemini.py` sends a prompt (plus optional files, images, web grounding, json schema) to one of several backends and prints the answer on stdout, metadata on stderr
-- `smith_agent.py` runs a sandboxed tool loop for multi-step scratch builds: fix a bug, add a feature, build a small app in a throwaway directory
+- `smith_agent.py` runs a sandboxed tool loop for multi-step scratch builds: fix a bug, add a feature, build a small app in a throwaway directory. when the task contract names a `verify` command, the harness runs it itself at finish and reports `verified` in the summary
 - `transcribe.py` transcribes audio locally with mlx-whisper (apple silicon)
 - `embed.py` does embeddings and reranking via cloudflare workers ai
 - a usage ledger records every run with its task shape, model, purpose and archived output
@@ -156,6 +156,7 @@ LICENSE             apache 2.0
 | `SMITH_NO_ARCHIVE=1` | do not archive outputs |
 | `SMITH_NO_FALLBACK=1` | do not reroute research when gemini hits a monthly cap |
 | `SMITH_NUDGE_AFTER`, `SMITH_NUDGE_EVERY` | hook cadence |
+| `SMITH_VERIFY_GATE` | `0` stops smith_agent running the contract's `verify` command itself at finish (default on) |
 | `SMITH_EVIDENCE_NEEDED` | proofs a streak of 10 needs for spot-check in research, doc-format, code-draft, app-build (default 3, `0` = off) |
 
 keys live in the environment. nothing in this repo reads them from a file.
