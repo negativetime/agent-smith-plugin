@@ -83,6 +83,8 @@ a `good` verdict strengthens a (shape, model) route. a `bad` one resets its stre
 
 a grade is a tag and a note. `--evidence FILE` (or `-` for stdin) attaches the artifact behind it: the test output, the urls that resolved, a length or diff check. it is copied to `data/evidence/` (git ignores it, a proof can hold private output) with its sha256, and `verdict.py audit` re-checks every one, so a proof that was deleted or edited shows up instead of quietly standing. an empty file, a directory or a missing path is refused.
 
+proofs also gate the top review tier. in `research`, `doc-format`, `code-draft` and `app-build`, a streak of 10 earns spot-check only when 3 of its last 10 goods carry a proof that still holds (the file is re-opened and re-hashed on every report, not trusted from the ledger). short of that the route stays at light review and the report says why. judgement shapes like `translate` and `copy-draft` are unchanged, because forcing a proof there would only produce junk files.
+
 ## backends
 
 | backend | where | cost | files / web |
@@ -154,6 +156,7 @@ LICENSE             apache 2.0
 | `SMITH_NO_ARCHIVE=1` | do not archive outputs |
 | `SMITH_NO_FALLBACK=1` | do not reroute research when gemini hits a monthly cap |
 | `SMITH_NUDGE_AFTER`, `SMITH_NUDGE_EVERY` | hook cadence |
+| `SMITH_EVIDENCE_NEEDED` | proofs a streak of 10 needs for spot-check in research, doc-format, code-draft, app-build (default 3, `0` = off) |
 
 keys live in the environment. nothing in this repo reads them from a file.
 

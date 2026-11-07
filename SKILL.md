@@ -78,8 +78,9 @@ Full recipes: [references/playbooks.md](references/playbooks.md).
    When a check backs the grade, attach it: `--evidence FILE` (or `-` for stdin) takes the
    pytest output, the list of URLs that resolved, the length or diff check. It is copied to
    `data/evidence/` (git-ignored) with its sha256; `verdict.py audit` re-checks every proof
-   and exits 1 on a deleted or edited one. Match the proof to the shape, and attach it most
-   where a `good` is lifting a route toward light review. Empty files are refused.
+   and exits 1 on a deleted or edited one. Match the proof to the shape. In research, doc-format,
+   code-draft and app-build it is what lets a streak of 10 reach spot-check (see Verdicts).
+   Empty files are refused.
    ⚠ With other sessions running, a bare verdict grades the newest run of ANY session
    (2026-10-18: one landed on another session's classify run). Pass `--run-id` (or `--ts`)
    from your own run's ledger row; `grep '<your --purpose>' data/usage.jsonl` finds it. When
@@ -674,6 +675,12 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   `verdict.py good|bad|stale "why" [--tag TASKTYPE] [--model M] [--script S] [--evidence FILE]`. Tags feed the
   report's **hebbian routing weights**: per (task-shape, model) quality + streak → review
   tier (≥5 light review, ≥10 spot-check). Good strengthens a route; one bad resets it.
+  **Spot-check needs proof** (decided 2026-11-07): in `research`, `doc-format`, `code-draft` and
+  `app-build`, a streak of 10 earns spot-check only if 3 of its last 10 goods carry a proof that
+  still holds NOW (`--evidence`; file present, sha256 matching, re-checked on every report, not
+  trusted from the ledger). Short of that the report holds the route at light review and prints
+  why. Judgement shapes (translate, copy-draft, long-digest, ...) are unchanged.
+  `SMITH_EVIDENCE_NEEDED=N` changes the 3; `0` turns the rule off.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every

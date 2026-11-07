@@ -34,6 +34,7 @@ import re
 import sqlite3
 import sys
 
+import grades
 import verdict_db
 
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
@@ -100,7 +101,7 @@ def audit():
     path is never opened). Also says how much of the good-grade volume carries a proof at all."""
     if not os.path.isfile(LEDGER):
         die(f"no ledger at {LEDGER}")
-    grades = []
+    graded = []
     with open(LEDGER) as f:
         for line in f:
             try:
@@ -109,28 +110,16 @@ def audit():
                 continue
             if (isinstance(r, dict) and r.get("script") == "verdict"
                     and r.get("verdict") in ("good", "bad")):
-                grades.append(r)
+                graded.append(r)
     root = os.path.dirname(os.path.abspath(LEDGER))
-    base = os.path.realpath(evidence_dir())
-    proved = [v for v in grades if v.get("evidence_file")]
+    proved = [v for v in graded if v.get("evidence_file")]
     problems = []
-    for v in proved:
-        who = f"{v.get('ts')} {v.get('verdict')} [{v.get('tag') or 'untagged'}]"
-        rel = v["evidence_file"]
-        if not isinstance(rel, str):
-            problems.append(f"{who}: evidence_file is not a path")
-            continue
-        path = os.path.realpath(os.path.join(root, rel))
-        if os.path.dirname(path) != base:
-            problems.append(f"{who}: {rel} is outside {base}; not opened")
-        elif not os.path.isfile(path):
-            problems.append(f"{who}: {rel} is missing")
-        else:
-            with open(path, "rb") as f:
-                if hashlib.sha256(f.read()).hexdigest() != v.get("evidence_sha256"):
-                    problems.append(f"{who}: {rel} no longer matches its recorded sha256")
-    good = [v for v in grades if v["verdict"] == "good"]
-    print(f"{len(proved)} of {len(grades)} grades name evidence "
+    for v in proved:        # the same check the review tier makes: grades.proof_state
+        ok, why = grades.proof_state(v, root)
+        if not ok:
+            problems.append(f"{v.get('ts')} {v.get('verdict')} [{v.get('tag') or 'untagged'}]: {why}")
+    good = [v for v in graded if v["verdict"] == "good"]
+    print(f"{len(proved)} of {len(graded)} grades name evidence "
           f"({sum(1 for v in good if v.get('evidence_file'))} of {len(good)} good).")
     for p in problems:
         print(f"PROBLEM  {p}")

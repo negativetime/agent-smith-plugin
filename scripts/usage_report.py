@@ -14,6 +14,7 @@ import grades
 
 LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "usage.jsonl")
+ROOT = os.path.dirname(os.path.abspath(LEDGER))   # holds the ledger and its evidence/ folder
 
 
 def is_benchmark(r):
@@ -134,23 +135,17 @@ def main():
     # One BUG graded across N runs is ONE event (20 `translate` bad rows with one note,
     # all written in the same second, suppressed that route 20x too hard). grades.routes
     # counts every grade, one per incident per route, in run order.
-    routes, collapsed_by = grades.routes(grades.judged(all_rows, grade_rows))
+    routes, collapsed_by = grades.route_grades(grades.judged(all_rows, grade_rows))
     if routes:
         print("routing weights (hebbian) — counting INCIDENTS, not rows:")
         for (tag, model), judged in sorted(routes.items(),
                                            key=lambda kv: (-len(kv[1]), kv[0])):
             collapsed = collapsed_by.get((tag, model), 0)
-            goods = sum(1 for _, verdict in judged if verdict == "good")
+            goods = sum(1 for _, v in judged if v["verdict"] == "good")
             bads = len(judged) - goods
-            streak = 0
-            for _, verdict in reversed(judged):
-                if verdict != "good":
-                    break
-                streak += 1
-            tier = ("trusted-shape (spot-check only)" if streak >= 10
-                    else "light review" if streak >= 5 else "full review")
+            t = grades.review_tier(judged, tag, ROOT)
             print(f"  {tag} @ {model}: {goods} good, {bads} bad, "
-                  f"{goods/len(judged):.0%} quality, streak {streak} -> {tier}"
+                  f"{goods/len(judged):.0%} quality, streak {t['streak']} -> {grades.tier_label(t)}"
                   + (f"   [{collapsed} duplicate row(s) collapsed]" if collapsed else ""))
     if witnesses:
         agree = sum(1 for w in witnesses if w.get("agree"))
