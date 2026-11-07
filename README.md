@@ -124,6 +124,7 @@ the exact fleet and lanes in `SKILL.md` are the author's, earned on the author's
 | `embed.py` | embeddings and reranking on workers ai |
 | `usage_report.py` | ledger aggregates, routing weights, `--unreviewed` review queue |
 | `verdict.py` | `good` / `bad` / `stale` after review; `--evidence` attaches the proof, `audit` re-checks it |
+| `proof_urls.py` | requests every URL in a saved answer and prints a proof (resolved / missing / unverified) to attach with `--evidence` |
 | `verdict_db.py` | sqlite mirror of the verdict trail for non-python consumers |
 | `gap_report.py` | unused and misrouted capacity, ledger joined against claude transcripts |
 | `fleet_check.py` | model digests vs an accepted baseline |

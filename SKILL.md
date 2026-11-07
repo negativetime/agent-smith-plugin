@@ -716,7 +716,13 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   --evidence FILE`. It is recorded as the same incident, so the route's counts do not change
   and the proof now holds (verified on a ledger copy: both held routes returned to spot-check
   after 3 re-grades each). Runs older than 2026-10-28 have no run_id, hence `--ts`. The proof
-  has to come from a real check of that answer (resolve its URLs; recompute the length or diff).
+  has to come from a real check of that answer. **Research:** `python3 scripts/proof_urls.py
+  <saved answer> > proof.txt` requests every URL and prints resolved / missing / unverified (exit 0
+  only when ALL resolved, so attach only a clean one; a missing URL is a finding to read before you
+  grade, not a proof). It also flags a redirect to a domain-for-sale page, and refuses non-public
+  addresses, since the URLs come from model output. An answer that cites only Gemini grounding
+  redirects (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`) cannot be proven this way:
+  they expire (exit 3). **Doc-format:** recompute the length or diff the note names.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every
