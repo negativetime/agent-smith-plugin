@@ -681,6 +681,8 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   trusted from the ledger). Short of that the report holds the route at light review and prints
   why. Judgement shapes (translate, copy-draft, long-digest, ...) are unchanged.
   `SMITH_EVIDENCE_NEEDED=N` changes the 3; `0` turns the rule off.
+  A grade written without `--tag` counts toward the tag of the run it grades (2026-11-07);
+  its own `--tag`, when given, wins.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every

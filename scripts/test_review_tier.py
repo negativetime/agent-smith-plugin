@@ -43,15 +43,20 @@ class Ledger:
         self.path = os.path.join(tmp, "usage.jsonl")
         self.rows, self.n = [], 0
 
-    def grade(self, tag, model, verdict="good", proof=None, note=""):
-        """A run plus one grade on it. proof=bytes writes a real file and names it."""
+    def grade(self, tag, model, verdict="good", proof=None, note="", gtag="same"):
+        """A run plus one grade on it. proof=bytes writes a real file and names it. gtag is the
+        grade's own tag: "same" (default) copies the run's, None writes a grade with no tag."""
         self.n += 1
         ts = f"2026-11-01T10:{self.n // 60:02d}:{self.n % 60:02d}"
         rid = f"{self.n:012d}"
         self.rows.append({"ts": ts, "run_id": rid, "script": "gemini", "model": model, "tag": tag,
                           "purpose": "probe"})
-        g = {"ts": ts, "script": "verdict", "verdict": verdict, "note": note, "tag": tag,
+        g = {"ts": ts, "script": "verdict", "verdict": verdict, "note": note,
              "ref_ts": ts, "ref_model": model, "ref_script": "gemini", "ref_run_id": rid}
+        if gtag == "same":
+            g["tag"] = tag
+        elif gtag is not None:
+            g["tag"] = gtag
         if proof is not None:
             sha = hashlib.sha256(proof).hexdigest()
             name = f"{sha[:16]}.txt"
@@ -194,6 +199,46 @@ with tempfile.TemporaryDirectory() as tmp:
     seq = full[("research", "m")]
     check(len(seq) == 1 and collapsed[("research", "m")] == 1 and seq[0][1].get("evidence_file"),
           "same note twice collapses to one event, and the one kept is the one with the proof")
+
+# ---- a grade written without --tag takes its run's tag -----------------------------------------
+def route_keys(L):
+    L.flush()
+    runs, grs, _ = grades.read(L.path)
+    full, _ = grades.route_grades(grades.judged(runs, grs))
+    return full
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    L = Ledger(tmp)
+    for _ in range(3):
+        L.grade("research", "m", gtag=None)
+    full = route_keys(L)
+    check(len(full.get(("research", "m"), [])) == 3,
+          "three untagged goods on a research run count toward research @ m")
+    check(("untagged", "m") not in full, "...and not toward an 'untagged' route")
+
+with tempfile.TemporaryDirectory() as tmp:
+    L = Ledger(tmp)
+    streak_of(L, "research", "m", 9, proofs_at=(1, 4, 8))
+    L.grade("research", "m", verdict="bad", note="fabricated url", gtag=None)      # the hole: a bad with no --tag
+    L.grade("research", "m")
+    t = L.tier("research", "m")
+    check(t["streak"] == 1 and t["tier"] == "full",
+          "a bad graded WITHOUT --tag resets its real route's streak (it used to vanish into 'untagged')")
+
+with tempfile.TemporaryDirectory() as tmp:
+    L = Ledger(tmp)
+    L.grade("classify", "m", gtag="research")
+    full = route_keys(L)
+    check(("research", "m") in full and ("classify", "m") not in full,
+          "a grade's own --tag wins over its run's tag")
+
+with tempfile.TemporaryDirectory() as tmp:
+    L = Ledger(tmp)
+    L.rows.append({"ts": "2026-11-01T10:00:01", "run_id": "x" * 12, "script": "gemini", "model": "m", "purpose": "probe"})
+    L.rows.append({"ts": "2026-11-01T10:00:01", "script": "verdict", "verdict": "good", "note": "",
+                   "ref_ts": "2026-11-01T10:00:01", "ref_model": "m", "ref_script": "gemini", "ref_run_id": "x" * 12})
+    check(("untagged", "m") in route_keys(L), "no tag on the grade or the run: 'untagged', as before")
 
 # ---- routes() is unchanged by the refactor -----------------------------------------------------
 def old_routes(pairs, route=grades.default_route):

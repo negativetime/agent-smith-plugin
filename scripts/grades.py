@@ -95,7 +95,13 @@ def judged(runs, grades):
 
 
 def default_route(run, grade):
-    return (grade.get("tag") or "untagged", run.get("model") or "?")
+    """(shape, model) a grade counts toward. A grade's own --tag wins; one written without it
+    takes the tag of the run it grades, which every run carries (an untagged call exits 2).
+    Until 2026-11-07 it fell to "untagged", so a bad graded without --tag could not reset its
+    real route's streak. Measured that day: 76 judged grades had no tag of their own, 71 named
+    a tagged run (70 of them classify); none of the 2 untagged bads was hiding, but nothing
+    prevented it."""
+    return (grade.get("tag") or run.get("tag") or "untagged", run.get("model") or "?")
 
 
 def route_grades(pairs, route=default_route):
