@@ -155,7 +155,8 @@ LICENSE             apache 2.0
 | `FM_HELPER` | path to the foundation models helper binary |
 | `SMITH_LEDGER` | override the ledger path |
 | `SMITH_LOG_PROMPTS=0` | record only explicit `--purpose`, not prompt text |
-| `SMITH_NO_ARCHIVE=1` | do not archive outputs |
+| `SMITH_NO_ARCHIVE=1` | do not archive outputs (or their inputs) |
+| `SMITH_ARCHIVE_INPUTS` | `0` keeps archiving outputs but stops copying their piped stdin and text `--file` inputs to `<run>.in/` (default on) |
 | `SMITH_NO_FALLBACK=1` | do not reroute research when gemini hits a monthly cap |
 | `SMITH_NUDGE_AFTER`, `SMITH_NUDGE_EVERY` | hook cadence |
 | `SMITH_JSON_TRIM` | `0` stops `--json` dropping non-JSON text that follows a complete JSON value (the status is still logged; default on) |

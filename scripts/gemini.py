@@ -1057,6 +1057,114 @@ def _archive_output(ledger_path, rec, text):
         return None
 
 
+# ---- inputs: keep what a run was GIVEN, beside what it said ---------------------------------------
+# 2026-11-07: a doc-format grade can be backed by proof_doc.py --source DRAFT, but only while the draft
+# exists. Over the 10 goods checked that day, 8 drafts were gone (4 deleted, 4 piped on stdin and never
+# saved) and the other 2 had changed. The output was archived; its input never was. So piped stdin and
+# --file inputs are copied to data/outputs/<date>/<run>.in/ and the row names them in `inputs`.
+# Text only, and never truncated: a cut draft would make a false proof, so an input over the cap is
+# recorded (size, sha256) and not copied. Binary files (PDFs, images, audio) are recorded, not copied.
+# Same opt-out as the output: SMITH_NO_ARCHIVE=1 (nothing is even read). SMITH_ARCHIVE_INPUTS=0 stops
+# only this. Not covered: an inline prompt argument, --batch, --cascade.
+INPUT_MAX_BYTES = 1_000_000     # one input; the output archive caps at the same size
+INPUT_MAX_ITEMS = 8             # inputs kept per run; the rest are recorded, not copied
+INPUT_HASH_MAX = 200_000_000    # a file bigger than this is recorded without a hash
+_INPUTS = []                    # set once per run by _note_inputs(), read by _ledger()
+
+
+def _inputs_enabled():
+    return (os.environ.get("SMITH_NO_ARCHIVE") not in ("1", "true", "yes")
+            and os.environ.get("SMITH_ARCHIVE_INPUTS") != "0")
+
+
+def _note_inputs(stdin_text, files, record=True):
+    """Remember this run's inputs for _ledger(). Always clears what an earlier run left; reads
+    nothing when archiving is off. Provenance must never break a call, so it swallows everything."""
+    global _INPUTS
+    _INPUTS = []
+    if not record or not _inputs_enabled():
+        return
+    try:
+        items = []
+        if stdin_text and stdin_text.strip():
+            raw = stdin_text.encode("utf-8", "surrogateescape")
+            items.append({"kind": "stdin", "name": "stdin", "bytes": len(raw),
+                          "sha256": hashlib.sha256(raw).hexdigest(),
+                          "data": raw if len(raw) <= INPUT_MAX_BYTES else None,
+                          "why": None if len(raw) <= INPUT_MAX_BYTES else "too large"})
+        for fp in files or []:
+            it = {"kind": "file", "name": os.path.basename(fp) or "file", "bytes": None,
+                  "sha256": None, "data": None, "why": None}
+            try:
+                size = os.path.getsize(fp)
+                it["bytes"] = size
+                if size <= INPUT_HASH_MAX:
+                    h = hashlib.sha256()
+                    head = b""
+                    with open(fp, "rb") as fh:
+                        while True:
+                            chunk = fh.read(1 << 20)
+                            if not chunk:
+                                break
+                            if len(head) <= INPUT_MAX_BYTES:
+                                head += chunk
+                            h.update(chunk)
+                    it["sha256"] = h.hexdigest()
+                    if size > INPUT_MAX_BYTES:
+                        it["why"] = "too large"
+                    elif b"\0" in head:
+                        it["why"] = "binary"
+                    else:
+                        try:
+                            head.decode("utf-8")
+                            it["data"] = head
+                        except UnicodeDecodeError:
+                            it["why"] = "binary"
+                else:
+                    it["why"] = "too large"
+            except OSError:
+                it["why"] = "unreadable"
+            items.append(it)
+        for i, it in enumerate(items):
+            if i >= INPUT_MAX_ITEMS and it["data"] is not None:
+                it["data"], it["why"] = None, "limit"
+        _INPUTS = items
+    except Exception:  # noqa: BLE001
+        _INPUTS = []
+
+
+def _archive_inputs(ledger_path, output_rel):
+    """Copy the noted inputs next to the archived output <stem>.txt, into <stem>.in/. Returns the
+    `inputs` list for the ledger row (paths relative to the ledger folder), or None."""
+    if not _INPUTS or not output_rel:
+        return None
+    try:
+        root = os.path.dirname(ledger_path)
+        stem = output_rel[:-4] if output_rel.endswith(".txt") else output_rel
+        d = os.path.join(root, stem + ".in")
+        rows, copied = [], 0
+        for i, it in enumerate(_INPUTS, 1):
+            row = {"kind": it["kind"], "name": it["name"], "bytes": it["bytes"], "sha256": it["sha256"]}
+            if it["data"] is not None:
+                os.makedirs(d, exist_ok=True)
+                safe = "stdin.txt" if it["kind"] == "stdin" else \
+                    f"file-{i}-" + re.sub(r"[^A-Za-z0-9._-]", "_", it["name"])[:80]
+                fp = os.path.join(d, safe)
+                with open(fp, "wb") as fh:
+                    fh.write(it["data"])
+                row["archived"] = os.path.relpath(fp, root)
+                copied += 1
+            else:
+                row["why"] = it["why"] or "not kept"
+            rows.append(row)
+        if copied:
+            log(f"[inputs] kept {copied} input cop{'y' if copied == 1 else 'ies'} beside the output "
+                f"({os.path.relpath(d, root)}); SMITH_NO_ARCHIVE=1 or SMITH_ARCHIVE_INPUTS=0 stops this")
+        return rows
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # What the endpoint SAID it ran, as opposed to what we asked for. Set by whichever
 # backend actually made the call; consumed by _ledger().
 #
@@ -1225,6 +1333,10 @@ def _ledger(rec, output=None, raw_output=None):
         saved = _archive_output(path, rec, output)
         if saved:
             rec["output_file"] = saved
+            if rec.get("script") == "gemini":
+                kept = _archive_inputs(path, saved)
+                if kept:
+                    rec["inputs"] = kept
         if raw_output:      # the answer as the model returned it, when --json delivered less of it
             saved_raw = _archive_output(path, dict(rec, script=f"{rec.get('script')}-raw"), raw_output)
             if saved_raw:
@@ -2190,6 +2302,8 @@ def main():
     if not prompt.strip() and not args.file:
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)
+
+    _note_inputs(stdin_text, args.file, record=not (args.cascade or args.batch))
 
     if args.cascade:
         run_cascade(args, prompt, t0)

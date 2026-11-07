@@ -731,7 +731,8 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   structure passed but content parity was NOT checked, which is a partial proof, not a full one.
   **Run it at grading time, while the draft exists**: over the 10 goods in the 2026-11-07 window 8
   drafts were lost (deleted, or piped on stdin and never saved) and the other 2 had changed since,
-  so a retroactive parity proof was not obtainable. Save the draft beside the output.
+  so a retroactive parity proof was not obtainable. Since 2026-11-07 `gemini.py` keeps the input
+  for you (see "Outputs are archived" below): pass that copy as `--source`.
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every
@@ -746,6 +747,18 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   `data/outputs/<date>/<ts>-<script>-<model>.txt` and the ledger row carries `output_file`.
   Before this, the loop demanded a verdict on every run while the tool stored nothing to
   judge — 17 runs aged into permanently ungradeable. `SMITH_NO_ARCHIVE=1` opts out.
+  **Inputs too (2026-11-07).** Piped stdin and text `--file` inputs are copied to
+  `data/outputs/<date>/<run>.in/` (`stdin.txt`, `file-N-<name>`), and the row's `inputs` field lists
+  each with its size and sha256. Pass that path as `proof_doc.py --source`: before this, 8 of the 10
+  draft files behind the doc-format goods were gone when a content-parity proof was wanted. Text
+  only, at most 1,000,000 bytes each, never truncated (a cut draft would give a false proof): an
+  input that is binary, over the cap or past the 8th is recorded with its sha256 and a `why`, not
+  copied. When the whole prompt came on stdin (no prompt argument), `stdin.txt` holds the
+  instructions as well; cut them before `--source`. Not covered: an inline prompt argument,
+  `--batch`, `--cascade`, and any run before 2026-11-07. `SMITH_NO_ARCHIVE=1` stops it (nothing is
+  read); `SMITH_ARCHIVE_INPUTS=0` stops only this. The copies can hold private material and sit in
+  the git-ignored `data/outputs/`; check one with `shasum -a 256` against the row. Probes:
+  `python3 -B scripts/test_input_archive.py`.
 - **The WebSearch nudge (2026-07-28).** `scripts/research_nudge.py` is a non-blocking
   `PreToolUse` hook on `WebSearch` (wired in `~/.claude/settings.json`). It stays quiet for
   the first 2 searches of a session, then prints the exact `--search --tag research` command
