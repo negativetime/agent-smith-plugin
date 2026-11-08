@@ -773,6 +773,13 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   read); `SMITH_ARCHIVE_INPUTS=0` stops only this. The copies can hold private material and sit in
   the git-ignored `data/outputs/`; check one with `shasum -a 256` against the row. Probes:
   `python3 -B scripts/test_input_archive.py`.
+- **From a background shell, close stdin: `< /dev/null`.** `gemini.py` reads stdin whenever it
+  is not a terminal, and a background shell's stdin is a socket that never closes, so a run
+  given only a prompt argument waits in `read()` forever (2026-11-07: 9 minutes with an empty
+  stderr, read as a slow API). There is no timeout, since a slow producer may send its first
+  byte minutes later; after 10 s of no data and no EOF it prints `[stdin] waiting for piped
+  input` once and keeps waiting (`SMITH_STDIN_WAIT_NOTICE=N` changes the 10). Probes:
+  `python3 -B scripts/test_stdin_wait.py`.
 - **The WebSearch nudge (2026-07-28).** `scripts/research_nudge.py` is a non-blocking
   `PreToolUse` hook on `WebSearch` (wired in `~/.claude/settings.json`). It stays quiet for
   the first 2 searches of a session, then prints the exact `--search --tag research` command

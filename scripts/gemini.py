@@ -1072,6 +1072,25 @@ INPUT_HASH_MAX = 200_000_000    # a file bigger than this is recorded without a 
 _INPUTS = []                    # set once per run by _note_inputs(), read by _ledger()
 
 
+def _read_stdin():
+    """Piped stdin, or "" at a terminal. A background shell's stdin is a socket that never
+    closes, so a run given only a prompt argument blocks in read() with nothing on stderr: seen
+    2026-11-07, 9 minutes that looked like a slow API. No timeout (a slow producer may send its
+    first byte minutes later); after SMITH_STDIN_WAIT_NOTICE seconds (default 10) of no data and
+    no EOF, it says so once, and keeps waiting."""
+    if sys.stdin.isatty():
+        return ""
+    try:
+        import select
+        wait = float(os.environ.get("SMITH_STDIN_WAIT_NOTICE") or 10)
+        if not select.select([sys.stdin], [], [], wait)[0]:
+            log(f"[stdin] waiting for piped input: no data and no EOF after {wait:g} s. If nothing "
+                f"is being piped in, this waits forever: run with < /dev/null.")
+    except (ValueError, OSError, TypeError):    # no fileno (a test's StringIO) or no select
+        pass
+    return sys.stdin.read()
+
+
 def _inputs_enabled():
     return (os.environ.get("SMITH_NO_ARCHIVE") not in ("1", "true", "yes")
             and os.environ.get("SMITH_ARCHIVE_INPUTS") != "0")
@@ -2300,7 +2319,7 @@ def main():
     # documented `cat spec.txt | gemini.py "Make a checklist"` shape); with no prompt
     # arg it IS the prompt. Previously stdin was silently dropped when a prompt arg
     # was present — every backend lost the piped payload (caught 2026-07-12).
-    stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+    stdin_text = _read_stdin()
     if args.prompt is not None:
         prompt = f"{args.prompt}\n\n{stdin_text}" if stdin_text.strip() else args.prompt
     else:
