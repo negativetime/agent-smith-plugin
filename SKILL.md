@@ -802,7 +802,16 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
 - **Fleet identity check:** `ollama pull` updates weights IN PLACE — a trusted model can
   silently become a different model. `python3 "$SKILL/scripts/fleet_check.py"` compares
   current digests vs the accepted baseline (`--accept` after a deliberate update + re-gate);
-  run it when anything smells off, and always after pulling updates.
+  run it when anything smells off, and always after pulling updates. Exit 3 = `ollama list`
+  could not be read (daemon stopped): nothing was compared. Before 2026-11-07 a stopped daemon
+  read as an empty fleet and reported every model MISSING.
+  **Catalog diff (2026-11-07):** `fleet_check.py --catalog` diffs what Gemini and z.ai OFFER
+  against `data/catalog_ids.json` and prints NEW ids (with the agent-gym command to measure one,
+  or that it needs a `MODELS` entry first), GONE ids (with the agent-smith scripts that still
+  name one) and a Gemini version string that changed; `--catalog --accept` records the lists.
+  It routes nothing: a model earns a lane in the gym. The `-latest` aliases report no target, so
+  a re-pointed alias is not seen here. A provider it cannot read is SKIPPED (exit 3), never
+  reported as all gone, and `--accept` then writes nothing. Run it now and then, say weekly.
 - **Witness comparison is STRUCTURAL, not textual.** Python uses the stdlib `ast`; other
   languages use tree-sitter when installed — `pip install tree-sitter tree-sitter-language-pack`
   (OPTIONAL: absent, non-Python falls back to exact-match, the pre-2026-07-20 behaviour, and

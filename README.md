@@ -128,7 +128,7 @@ the exact fleet and lanes in `SKILL.md` are the author's, earned on the author's
 | `proof_doc.py` | checks an HTML-ified doc against the house shell (CSS byte-identical, complete, self-contained) and, given the draft, its content (figures, words, headings); prints a proof to attach with `--evidence` |
 | `verdict_db.py` | sqlite mirror of the verdict trail for non-python consumers |
 | `gap_report.py` | unused and misrouted capacity, ledger joined against claude transcripts |
-| `fleet_check.py` | model digests vs an accepted baseline |
+| `fleet_check.py` | model digests vs an accepted baseline; `--catalog` diffs the Gemini and z.ai model lists |
 | `research_nudge.py`, `fanout_nudge.py` | non-blocking `PreToolUse` hooks |
 | `test_preflight.py` | tests for the `--preflight` syntax check |
 
