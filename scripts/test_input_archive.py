@@ -131,6 +131,7 @@ check(inp and inp[0].get("archived") == row["output_file"][:-4] + ".in/stdin.txt
       "...archived beside the output as <run>.in/stdin.txt")
 check(inp and read_bytes(tmp, inp[0]["archived"]) == DRAFT.encode(), "...and the copy is the draft byte for byte")
 check(row["prompt_chars"] == len("convert this to html\n\n" + DRAFT), "...prompt_chars is unchanged by archiving")
+check(inp and inp[0].get("role") == "data", "...role data: stdin ran below a prompt argument, so it is the draft alone")
 check("[inputs] kept 1 input copy" in se, "...stderr says a copy was kept, and how to stop it")
 check("SMITH_NO_ARCHIVE=1" in se and "SMITH_ARCHIVE_INPUTS=0" in se, "...naming both switches")
 
@@ -140,6 +141,7 @@ i0 = (row.get("inputs") or [{}])[0]
 check(i0.get("archived") and read_bytes(tmp, i0["archived"]) == ("Convert to html:\n" + DRAFT).encode()
       and row["prompt_chars"] == len("Convert to html:\n" + DRAFT),
       "no prompt argument: stdin is the whole prompt and is kept as sent (instructions and all)")
+check(i0.get("role") == "prompt", "...role prompt: the copy holds the instructions, so it is not a draft to prove against")
 
 row, tmp, se = run()
 check("inputs" not in row and not any(p.endswith(".in") for p in outputs_listing(tmp)),

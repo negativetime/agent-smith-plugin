@@ -733,6 +733,20 @@ domain terms can be misheard). Pattern: transcribe locally, then offload the tex
   drafts were lost (deleted, or piped on stdin and never saved) and the other 2 had changed since,
   so a retroactive parity proof was not obtainable. Since 2026-11-07 `gemini.py` keeps the input
   for you (see "Outputs are archived" below): pass that copy as `--source`.
+  **The check runs itself (2026-11-07).** A `good` on a research or doc-format run with no
+  `--evidence` runs `proof_urls.py` / `proof_doc.py` on that run's saved answer (doc-format adds
+  `--source` when the run archived exactly one draft: a `.md`/`.markdown`/`.txt` `--file`, or stdin
+  piped BELOW a prompt argument; stdin that was the whole prompt holds the instructions, so it is
+  never used). Clean (exit 0): the report is attached as the proof, row marked `evidence_auto`.
+  Found a problem (exit 1): the good is REFUSED and nothing is written; read the report, then grade
+  bad, or pass `--no-proof` if it does not count against the answer (a link that rotted after the
+  run). Partial (unverifiable URLs, no draft): the good is recorded without a proof and the reason
+  printed. So **for doc-format, pass the draft with `--file draft.md`** (or pipe it under a prompt
+  argument), or the route never earns a parity proof. `SMITH_AUTO_PROOF=0` turns it off. Measured
+  on real saved answers (ledger copy): a clean research answer got its proof attached, the
+  2026-09-12 answer with 3 dead links was refused, a grounding-only answer and a pre-archive page
+  were recorded without one. Probes: `python3 -B scripts/test_auto_proof.py` (35 checks, 17 of 17
+  mutants caught).
   `stale` = the output no longer exists to judge (pre-archive run, deleted workdir); it clears
   the queue WITHOUT counting as good or bad.
 - **How grades count (2026-10-25): `scripts/grades.py`, the one rule both reports use.** Every

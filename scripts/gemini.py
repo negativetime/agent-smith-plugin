@@ -1077,9 +1077,12 @@ def _inputs_enabled():
             and os.environ.get("SMITH_ARCHIVE_INPUTS") != "0")
 
 
-def _note_inputs(stdin_text, files, record=True):
+def _note_inputs(stdin_text, files, record=True, stdin_is_prompt=False):
     """Remember this run's inputs for _ledger(). Always clears what an earlier run left; reads
-    nothing when archiving is off. Provenance must never break a call, so it swallows everything."""
+    nothing when archiving is off. Provenance must never break a call, so it swallows everything.
+    `stdin_is_prompt`: no prompt argument was given, so stdin carries the instructions too; the
+    stdin row says so (role prompt, else data), because a proof that compares a page against its
+    draft needs the draft alone (proof_doc.py --source, run by verdict.py)."""
     global _INPUTS
     _INPUTS = []
     if not record or not _inputs_enabled():
@@ -1089,6 +1092,7 @@ def _note_inputs(stdin_text, files, record=True):
         if stdin_text and stdin_text.strip():
             raw = stdin_text.encode("utf-8", "surrogateescape")
             items.append({"kind": "stdin", "name": "stdin", "bytes": len(raw),
+                          "role": "prompt" if stdin_is_prompt else "data",
                           "sha256": hashlib.sha256(raw).hexdigest(),
                           "data": raw if len(raw) <= INPUT_MAX_BYTES else None,
                           "why": None if len(raw) <= INPUT_MAX_BYTES else "too large"})
@@ -1145,6 +1149,8 @@ def _archive_inputs(ledger_path, output_rel):
         rows, copied = [], 0
         for i, it in enumerate(_INPUTS, 1):
             row = {"kind": it["kind"], "name": it["name"], "bytes": it["bytes"], "sha256": it["sha256"]}
+            if it.get("role"):
+                row["role"] = it["role"]
             if it["data"] is not None:
                 os.makedirs(d, exist_ok=True)
                 safe = "stdin.txt" if it["kind"] == "stdin" else \
@@ -2303,7 +2309,8 @@ def main():
         log("ERROR: no prompt given (pass an argument or pipe text on stdin).")
         sys.exit(2)
 
-    _note_inputs(stdin_text, args.file, record=not (args.cascade or args.batch))
+    _note_inputs(stdin_text, args.file, record=not (args.cascade or args.batch),
+                 stdin_is_prompt=args.prompt is None)
 
     if args.cascade:
         run_cascade(args, prompt, t0)

@@ -11,6 +11,14 @@ After you (Claude or the user) review a delegated output, record the verdict:
     python3 verdict.py good --run-id 3f9c2a7b1e04   # one run, when several share a ts
     python3 verdict.py good --evidence pytest.log   # attach the check you ran (a file, or - for stdin)
     python3 verdict.py audit                        # re-check that every attached proof still holds
+    python3 verdict.py good --no-proof "..."        # research/doc-format: skip the automatic check
+
+A `good` on a research or doc-format run checks that run's saved answer itself when no
+--evidence is given (proof_urls.py / proof_doc.py; SMITH_AUTO_PROOF=0 turns it off). A clean
+check is attached as the proof. A check that FINDS a problem refuses the good and prints what it
+found: read it, then grade bad, or pass --no-proof if it does not count against the answer (a
+link that rotted after the run). A partial check (unverifiable URLs, a draft it cannot find) is
+reported and not attached, so the good is recorded without a proof.
 
 A grade must name one run. When the ts (or "most recent") fits several runs, as parallel
 runs finishing in the same second do, verdict.py refuses and lists their run_ids.
@@ -32,6 +40,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 
 import grades
@@ -41,6 +50,15 @@ LEDGER = os.environ.get("SMITH_LEDGER") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "usage.jsonl")
 
 EVIDENCE_MAX = 2_000_000    # bytes: a test log or a diff, not a recording
+
+# ---- automatic proof at grading time (2026-11-07) ------------------------------------------------
+# The spot-check rule (grades.review_tier) needs 3 proofs among a route's last 10 goods. The proof
+# tools existed, but a proof only happened when the grader remembered to run one: on the day they
+# shipped, doc-format @ gemini-pro-latest sat on a streak of 13 with 0 proofs, held at light review
+# by nothing but a missing habit. So a `good` on these shapes runs the check itself.
+AUTO_PROOF = {"research": "proof_urls.py", "doc-format": "proof_doc.py"}
+PROOF_TIMEOUT = 300         # seconds; 60 URLs at 15 s each over 4 workers fits with room
+DRAFT_EXTS = (".md", ".markdown", ".txt")
 
 
 def die(msg):
@@ -95,6 +113,80 @@ def save_evidence(data, suffix):
             "evidence_bytes": len(data)}
 
 
+def proof_scripts_dir():
+    """Where the proof tools live. SMITH_PROOF_SCRIPTS_DIR exists for the probes, which swap in
+    stand-ins so no test sends a request."""
+    return os.environ.get("SMITH_PROOF_SCRIPTS_DIR") or os.path.dirname(os.path.abspath(__file__))
+
+
+def doc_draft(target, root):
+    """(path, None) for the one archived draft a doc-format run was given, else (None, why).
+    A stdin copy counts only when stdin ran below a prompt argument (role data): with no prompt
+    argument it holds the instructions too, and every instruction word would read as missing from
+    the page. The house shell (an .html --file) is never the draft."""
+    cands = []
+    for it in target.get("inputs") or []:
+        rel = it.get("archived")
+        if not rel:
+            continue
+        if it.get("kind") == "stdin":
+            if it.get("role") == "data":
+                cands.append(rel)
+        elif it.get("kind") == "file" and (it.get("name") or "").lower().endswith(DRAFT_EXTS):
+            cands.append(rel)
+    if not target.get("inputs"):
+        return None, ("the run kept no copy of its input (runs before 2026-11-07, an inline "
+                      "prompt, --batch, --cascade)")
+    if not cands:
+        return None, ("no archived draft: the draft came inside the prompt on stdin, or was not a "
+                      ".md/.markdown/.txt file; pass the draft with --file next time")
+    if len(cands) > 1:
+        return None, f"{len(cands)} archived inputs could be the draft, and a proof must name one"
+    path = os.path.normpath(os.path.join(root, cands[0]))
+    if not path.startswith(os.path.join(root, "outputs") + os.sep) or not os.path.isfile(path):
+        return None, f"the archived draft {cands[0]!r} is not in the outputs folder any more"
+    return path, None
+
+
+def auto_proof(tag, target):
+    """Run the shape's proof tool on the graded run's saved answer.
+    Returns (status, report, why): status 'proved' (attach report), 'failed' (refuse the good),
+    or 'none' (record the good without a proof; why says what was missing)."""
+    root = os.path.dirname(os.path.abspath(LEDGER))
+    rel = target.get("output_file")
+    answer = os.path.normpath(os.path.join(root, rel)) if rel else None
+    if not answer or not os.path.isfile(answer):
+        return "none", None, "no saved answer to check (a pre-archive run, or the file is gone)"
+    argv = [sys.executable, "-B", os.path.join(proof_scripts_dir(), AUTO_PROOF[tag]), answer]
+    partial = None
+    if tag == "doc-format":
+        draft, partial = doc_draft(target, root)
+        if draft:
+            argv += ["--source", draft]
+    try:
+        p = subprocess.run(argv, capture_output=True, timeout=PROOF_TIMEOUT,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "none", None, f"{AUTO_PROOF[tag]} took over {PROOF_TIMEOUT} s and was stopped"
+    except OSError as e:
+        return "none", None, f"could not run {AUTO_PROOF[tag]}: {e}"
+    report = p.stdout
+    shown = (p.stdout + p.stderr).decode("utf-8", "replace").rstrip()
+    if p.returncode == 0 and report.strip():
+        return "proved", report, None
+    if p.returncode == 1:
+        return "failed", shown, None
+    if p.returncode == 3:
+        why = ("only unverifiable URLs (hosts that refuse automated requests, or expiring Gemini "
+               "grounding links)" if tag == "research"
+               else "the structure passed, but content parity was not checked: " + (partial or "no draft"))
+        return "none", shown, why
+    if p.returncode == 2:
+        return "none", shown, ("no URL in the answer" if tag == "research"
+                               else "the answer or the draft could not be read")
+    return "none", shown, f"{AUTO_PROOF[tag]} exited {p.returncode}"
+
+
 def audit():
     """Re-check every proof a grade names against the file on disk. Exit 1 if any no longer
     holds: deleted, edited, or pointing outside the evidence folder (a hand-edited ledger; that
@@ -147,12 +239,17 @@ def main():
                     help="the artifact that backs this grade (test output, resolved URLs, a "
                          "length or diff check); FILE, or - for stdin. Copied to data/evidence/ "
                          "and its sha256 recorded; `audit` re-checks it.")
+    ap.add_argument("--no-proof", action="store_true",
+                    help="research/doc-format good: skip the automatic check (it found a problem "
+                         "you have read and judged not to count, e.g. a link that rotted later)")
     args = ap.parse_args()
 
     if args.verdict == "audit":
         if args.evidence is not None or args.note:
             die("audit takes no note and no --evidence.")
         audit()
+    if args.no_proof and (args.verdict != "good" or args.evidence is not None):
+        die("--no-proof only skips the automatic check on a good that carries no --evidence.")
     if args.verdict == "stale" and args.evidence is not None:
         die("a stale mark is not a grade, so there is nothing for evidence to back.")
     if args.verdict == "bad" and not args.note:
@@ -236,6 +333,27 @@ def main():
                   "--ts <exact ts>.", file=sys.stderr)
             sys.exit(1)
 
+    # ---- automatic proof (research, doc-format) -----------------------------------------------
+    # Runs before anything is written, so a refusal leaves the ledger and data/evidence/ untouched.
+    shape = args.tag or target.get("tag")
+    auto_note = None
+    if (args.verdict == "good" and ev is None and not args.no_proof and shape in AUTO_PROOF
+            and os.environ.get("SMITH_AUTO_PROOF") != "0"):
+        status, report, why = auto_proof(shape, target)
+        if status == "failed":
+            print(report, file=sys.stderr)
+            print(f"\nREFUSED: {AUTO_PROOF[shape]} found a problem in this {shape} answer (above), "
+                  f"so it is not graded good.\n  Read it. Grade bad if it counts against the answer; "
+                  f"if it does not (a link that rotted after the run), re-run with --no-proof.",
+                  file=sys.stderr)
+            sys.exit(1)
+        if status == "proved":
+            ev = (report, ".txt")
+            auto_note = f"proof: {AUTO_PROOF[shape]} passed on the saved answer, attached"
+        else:
+            auto_note = (f"no proof attached: {why}. The good counts; it does not help this route "
+                         f"toward spot-check.")
+
     rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
            "script": "verdict", "verdict": args.verdict, "note": args.note,
            "ref_ts": target.get("ts"), "ref_model": target.get("model"),
@@ -277,6 +395,8 @@ def main():
                   f"Routing weights count incidents, not rows.", file=sys.stderr)
     if ev is not None:
         rec.update(save_evidence(*ev))      # the proof lands first, so the grade never names a gap
+        if auto_note:
+            rec["evidence_auto"] = AUTO_PROOF[shape]
     with open(LEDGER, "a") as f:
         f.write(json.dumps(rec) + "\n")
     try:
@@ -291,6 +411,8 @@ def main():
           + (f"  [tag: {args.tag}]" if args.tag else "")
           + (f"  ({args.note})" if args.note else "")
           + (f"  [evidence: {rec['evidence_file']}]" if "evidence_file" in rec else ""))
+    if auto_note:
+        print(f"-> {auto_note}")
     if args.verdict == "bad":
         print("-> feed it back: this task shape deserves a regression test "
               "before you delegate it again.")
