@@ -145,6 +145,14 @@ def doc_draft(target, root):
     path = os.path.normpath(os.path.join(root, cands[0]))
     if not path.startswith(os.path.join(root, "outputs") + os.sep) or not os.path.isfile(path):
         return None, f"the archived draft {cands[0]!r} is not in the outputs folder any more"
+    # The playbook's gemini-cli lane pipes the draft AND the shell on stdin under a prompt
+    # argument: that copy is role data, but the shell's text would read as draft words missing
+    # from the page, and refuse a good page. A copy carrying HTML is not a markdown draft.
+    with open(path, "rb") as f:
+        head = f.read(1_000_000).lower()
+    if b"<html" in head or b"<style" in head:
+        return None, ("the archived input carries HTML (the shell piped with the draft?), so it is "
+                      "not the draft alone; pass the draft with --file next time")
     return path, None
 
 

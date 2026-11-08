@@ -253,6 +253,11 @@ check(C.calls() and source_of(C.calls()[0]) is None,
 check(rc == 0 and "evidence_file" not in C.last_row() and "came inside the prompt on stdin" in out,
       "...exit 3: graded good without a proof, and says the draft came inside the prompt")
 
+rid, _ = C.add_run("doc-format", inputs=[("stdin", "stdin", "data", DRAFT + "\n" + SHELL)])
+rc, out = C.grade("good", "parity", "--run-id", rid, rc=3)
+check(C.calls() and source_of(C.calls()[0]) is None and "carries HTML" in out,
+      "draft + shell piped together under a prompt (the gemini-cli lane): not the draft alone, never a false refusal")
+
 rid, _ = C.add_run("doc-format", inputs=[("stdin", "stdin", None, DRAFT)])
 C.grade("good", "parity", "--run-id", rid, rc=3)
 check(C.calls() and source_of(C.calls()[0]) is None,
