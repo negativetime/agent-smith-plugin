@@ -10,3 +10,6 @@ data/ollama_usage.jsonl
 # repo-mode worktrees + settled patches (scratch, per-run)
 data/worktrees/
 data/evidence/
+
+# The model lists this account can see (fleet_check.py --catalog): can name early-access models, never publish
+data/catalog_ids.json
